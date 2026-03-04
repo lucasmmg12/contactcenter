@@ -16,7 +16,18 @@ const corsHeaders = {
 const SYSTEM_PROMPT = `Eres un supervisor experto de calidad de atención al cliente en el Sanatorio Argentino (clínica médica en Argentina).
 Tu trabajo es generar un PERFIL DE RENDIMIENTO detallado de un agente de contact center basándote en datos reales de sus conversaciones.
 
+CONTEXTO CRÍTICO DEL FLUJO DE ATENCIÓN:
+- TODAS las conversaciones inician con un bot llamado "Betina" (asistente virtual automático).
+- Betina saluda, presenta opciones del menú y guía al paciente.
+- Cuando el bot no puede resolver, TRANSFIERE la conversación a un agente HUMANO.
+- El agente humano que analizas es quien toma la conversación DESPUÉS del bot.
+- Los mensajes que te proporcionamos como "muestra" son SOLO del agente humano, NO del bot.
+- Por lo tanto, si ves mensajes del tipo "Hola, soy Betina" o similares en los resúmenes, SON DEL BOT, no del agente.
+- NO critiques al agente por "presentarse como Betina" — eso es el bot, no el agente.
+- El "tiempo de handoff" (bot→agente) NO es totalmente responsabilidad del agente — depende de la carga de trabajo, turnos y cantidad de agentes disponibles.
+
 Debes ser constructivo pero honesto. Usa datos concretos cuando puedas.
+Centra tu análisis SOLO en lo que el agente humano hace: su tono, sus respuestas, su efectividad, su empatía, etc.
 Responde SIEMPRE en español y en JSON válido (sin markdown, sin texto adicional).`;
 
 const ANALYSIS_SCHEMA = `{
@@ -222,32 +233,36 @@ Deno.serve(async (req) => {
 
         const topSuggestions = [...new Set(stats.all_suggestions)].slice(0, 10).join("\n- ");
 
-        const userPrompt = `Analiza el rendimiento del agente "${agent_name}" del Sanatorio Argentino basándote en estos datos reales:
+        const summariesList = stats.all_summaries.slice(0, 10).map((s, i) => `${i + 1}. ${s}`).join("\n");
+
+        const userPrompt = `Analiza el rendimiento del agente humano "${agent_name}" del Sanatorio Argentino basándote en estos datos reales:
+
+RECORDATORIO: "${agent_name}" es un agente HUMANO que atiende DESPUÉS de que el bot "Betina" transfiere la conversación. Los mensajes de muestra que verás abajo son EXCLUSIVAMENTE del agente humano "${agent_name}" (ya se filtraron los mensajes del bot). NO menciones a Betina en tu análisis del agente.
 
 **ESTADÍSTICAS GENERALES:**
 - Total de conversaciones atendidas: ${stats.total_chats}
 - Sentimiento promedio de sus pacientes: ${stats.avg_sentiment} (escala -1 a +1)
-- Distribución de sentimiento: ${JSON.stringify(stats.sentiments)}
-- Score de protocolo promedio: ${stats.avg_protocol}/10
 - Tonos detectados: ${JSON.stringify(stats.tones)}
 - Tasa de saludo correcto: ${stats.greeting_rate}%
 - Tasa de despedida correcta: ${stats.farewell_rate}%
-- Tiempo promedio de handoff (bot→agente): ${stats.handoff_times.length > 0 ? Math.round(stats.handoff_times.reduce((a, b) => a + b, 0) / stats.handoff_times.length / 60) + ' minutos' : 'N/A'}
+- Tiempo promedio de handoff (bot→agente): ${stats.handoff_times.length > 0 ? Math.round(stats.handoff_times.reduce((a, b) => a + b, 0) / stats.handoff_times.length / 60) + ' minutos (nota: esto depende de carga de trabajo general, no solo del agente)' : 'N/A'}
 - Intenciones más atendidas: ${JSON.stringify(stats.intents)}
 
-**PALABRAS CLAVE MÁS USADAS POR EL AGENTE:**
+**PALABRAS CLAVE MÁS USADAS POR "${agent_name}" (solo del agente humano, no del bot):**
 ${topKeywords || "Sin datos"}
 
-**MUESTRA DE MENSAJES REALES DEL AGENTE (${agentMessages.length} mensajes):**
+**MUESTRA DE MENSAJES REALES DE "${agent_name}" — SOLO mensajes del agente humano (${agentMessages.length} mensajes, el bot fue filtrado):**
 ${msgSamples || "Sin mensajes disponibles"}
 
 **SUGERENCIAS DE MEJORA DETECTADAS EN CONVERSACIONES INDIVIDUALES:**
 - ${topSuggestions || "Ninguna"}
 
 **RESÚMENES DE ÚLTIMAS CONVERSACIONES:**
-${stats.all_summaries.slice(0, 10).map((s, i) => `${i + 1}. ${s}`).join("\n")}
+${summariesList}
 
-Genera un perfil de rendimiento completo. Sé constructivo y específico. Usa datos concretos.
+Genera un perfil de rendimiento completo para "${agent_name}". Sé constructivo y específico. Usa datos concretos.
+NO menciones al bot Betina como si fuera el agente. Analiza SOLO el comportamiento humano del agente.
+NO hables de "protocolo" ya que no existe un protocolo formal establecido. Evalúa en cambio la calidad de atención, empatía y resolución.
 Devuelve SOLAMENTE el JSON, sin markdown ni texto adicional.
 ${ANALYSIS_SCHEMA}`;
 
