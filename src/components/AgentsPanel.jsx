@@ -1,13 +1,14 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
     Users, Star, Clock, MessageSquare,
-    ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, Filter, AlertTriangle, Download, Timer
+    ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, Filter, AlertTriangle, Download, Timer,
+    Brain, Sparkles, TrendingUp, TrendingDown, Target, Loader2
 } from 'lucide-react'
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
     RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts'
-import { fetchAgentStats, exportToCSV } from '../services/dataService'
+import { fetchAgentStats, exportToCSV, fetchAgentProfile } from '../services/dataService'
 import DateFilter from './DateFilter'
 
 export default function AgentsPanel() {
@@ -341,6 +342,23 @@ export default function AgentsPanel() {
 }
 
 function AgentDetail({ agent }) {
+    const [aiProfile, setAiProfile] = useState(null)
+    const [aiLoading, setAiLoading] = useState(false)
+    const [aiError, setAiError] = useState(null)
+
+    async function generateProfile() {
+        try {
+            setAiLoading(true)
+            setAiError(null)
+            const result = await fetchAgentProfile(agent.agent_name)
+            setAiProfile(result.profile)
+        } catch (err) {
+            setAiError(err.message)
+        } finally {
+            setAiLoading(false)
+        }
+    }
+
     // Radar chart data
     const radarData = [
         { metric: 'Protocolo', value: parseFloat(agent.avg_protocol) || 0, max: 10 },
@@ -351,19 +369,32 @@ function AgentDetail({ agent }) {
         { metric: 'Handoff', value: agent.avg_handoff_time ? Math.max(0, 10 - (agent.avg_handoff_time / 180)) : 5, max: 10 },
     ]
 
-    // Tone distribution chart
     const toneData = Object.entries(agent.tones).map(([name, value]) => ({ name, value }))
-
-    // Keywords
     const keywords = agent.top_keywords || []
+
+    const getScoreColor = (score) => {
+        if (score >= 8) return '#10b981'
+        if (score >= 6) return '#f59e0b'
+        if (score >= 4) return '#f97316'
+        return '#ef4444'
+    }
+
+    const getPriorityStyle = (priority) => {
+        const map = {
+            alta: { bg: '#fef2f2', border: '#fca5a5', color: '#dc2626', icon: '🔴' },
+            media: { bg: '#fffbeb', border: '#fcd34d', color: '#d97706', icon: '🟡' },
+            baja: { bg: '#f0fdf4', border: '#86efac', color: '#16a34a', icon: '🟢' },
+        }
+        return map[priority] || map.media
+    }
 
     return (
         <div className="slide-in-right" style={{
             background: '#f8fafc', padding: '20px',
             borderTop: '2px solid #1a6bb5',
         }}>
+            {/* Row 1: Radar + Tone + Keywords */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
-                {/* Radar Chart */}
                 <div className="card">
                     <div className="card-header"><h3>Performance Radar</h3></div>
                     <div className="card-body">
@@ -378,7 +409,6 @@ function AgentDetail({ agent }) {
                     </div>
                 </div>
 
-                {/* Tone Distribution */}
                 <div className="card">
                     <div className="card-header"><h3>Distribución de Tono</h3></div>
                     <div className="card-body">
@@ -398,7 +428,6 @@ function AgentDetail({ agent }) {
                     </div>
                 </div>
 
-                {/* Keywords */}
                 <div className="card">
                     <div className="card-header"><h3>Palabras Clave</h3></div>
                     <div className="card-body">
@@ -414,7 +443,6 @@ function AgentDetail({ agent }) {
                             <p style={{ color: '#94a3b8', fontSize: '13px', textAlign: 'center', padding: '40px' }}>Sin keywords detectadas</p>
                         )}
 
-                        {/* Top intents */}
                         {Object.keys(agent.intents).length > 0 && (
                             <>
                                 <h4 style={{ fontSize: '12px', fontWeight: 600, color: '#64748b', marginTop: '20px', marginBottom: '8px' }}>
@@ -435,6 +463,272 @@ function AgentDetail({ agent }) {
                         )}
                     </div>
                 </div>
+            </div>
+
+            {/* Row 2: AI Profile Analysis */}
+            <div style={{ marginTop: '20px' }}>
+                {!aiProfile && !aiLoading && (
+                    <div className="card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+                        <Brain size={48} style={{ color: '#8b5cf6', margin: '0 auto 16px' }} />
+                        <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#1e293b', marginBottom: '8px' }}>
+                            Análisis IA del Agente
+                        </h3>
+                        <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '20px', maxWidth: '500px', margin: '0 auto 20px' }}>
+                            Genera un perfil completo basado en IA analizando todas las conversaciones de {agent.agent_name}.
+                            Incluye fortalezas, debilidades, estilo de comunicación y recomendaciones.
+                        </p>
+                        <button
+                            onClick={generateProfile}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '8px',
+                                padding: '12px 28px', borderRadius: '12px',
+                                background: 'linear-gradient(135deg, #8b5cf6, #6d28d9)',
+                                color: 'white', border: 'none', cursor: 'pointer',
+                                fontSize: '14px', fontWeight: 600,
+                                boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)',
+                                transition: 'all 0.2s'
+                            }}
+                            onMouseOver={e => e.target.style.transform = 'translateY(-2px)'}
+                            onMouseOut={e => e.target.style.transform = 'translateY(0)'}
+                        >
+                            <Sparkles size={18} />
+                            Generar Análisis IA
+                        </button>
+                        {aiError && (
+                            <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '12px' }}>{aiError}</p>
+                        )}
+                    </div>
+                )}
+
+                {aiLoading && (
+                    <div className="card" style={{ textAlign: 'center', padding: '60px 20px' }}>
+                        <Loader2 size={40} style={{ color: '#8b5cf6', margin: '0 auto 16px', animation: 'spin 1s linear infinite' }} />
+                        <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#475569' }}>
+                            Analizando {agent.total_chats} conversaciones de {agent.agent_name}...
+                        </h3>
+                        <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>Esto puede tardar unos segundos</p>
+                        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+                    </div>
+                )}
+
+                {aiProfile && (
+                    <div className="card">
+                        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Brain size={18} style={{ color: '#8b5cf6' }} />
+                                Perfil IA — {agent.agent_name}
+                            </h3>
+                            <button
+                                onClick={generateProfile}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '6px',
+                                    padding: '6px 14px', borderRadius: '8px',
+                                    background: '#f1f5f9', border: '1px solid #e2e8f0',
+                                    cursor: 'pointer', fontSize: '12px', color: '#64748b'
+                                }}
+                            >
+                                <Sparkles size={14} /> Regenerar
+                            </button>
+                        </div>
+                        <div className="card-body" style={{ padding: '24px' }}>
+                            {/* Score + Executive Summary */}
+                            <div style={{
+                                display: 'flex', gap: '24px', alignItems: 'flex-start',
+                                marginBottom: '24px', padding: '20px',
+                                background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)',
+                                borderRadius: '12px', border: '1px solid #e2e8f0'
+                            }}>
+                                <div style={{
+                                    minWidth: '80px', height: '80px',
+                                    borderRadius: '50%',
+                                    background: `conic-gradient(${getScoreColor(aiProfile.score_general)} ${aiProfile.score_general * 10}%, #f1f5f9 0)`,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    position: 'relative'
+                                }}>
+                                    <div style={{
+                                        width: '64px', height: '64px', borderRadius: '50%',
+                                        background: 'white', display: 'flex',
+                                        alignItems: 'center', justifyContent: 'center',
+                                        flexDirection: 'column'
+                                    }}>
+                                        <span style={{ fontSize: '22px', fontWeight: 800, color: getScoreColor(aiProfile.score_general) }}>
+                                            {aiProfile.score_general}
+                                        </span>
+                                        <span style={{ fontSize: '9px', color: '#94a3b8' }}>/10</span>
+                                    </div>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <h4 style={{ fontSize: '14px', fontWeight: 700, color: '#1e293b', marginBottom: '8px' }}>
+                                        Resumen Ejecutivo
+                                    </h4>
+                                    <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.6, margin: 0 }}>
+                                        {aiProfile.resumen_ejecutivo}
+                                    </p>
+                                    {aiProfile.nota_final && (
+                                        <p style={{
+                                            fontSize: '12px', color: '#8b5cf6', fontStyle: 'italic',
+                                            marginTop: '8px', margin: '8px 0 0'
+                                        }}>
+                                            ✨ {aiProfile.nota_final}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Strengths & Weaknesses */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                {/* Strengths */}
+                                <div>
+                                    <h4 style={{
+                                        fontSize: '13px', fontWeight: 700, color: '#16a34a',
+                                        display: 'flex', alignItems: 'center', gap: '6px',
+                                        marginBottom: '12px'
+                                    }}>
+                                        <TrendingUp size={16} /> Puntos Fuertes
+                                    </h4>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                        {(aiProfile.puntos_fuertes || []).map((p, i) => (
+                                            <div key={i} style={{
+                                                padding: '12px 16px', borderRadius: '10px',
+                                                background: '#f0fdf4', border: '1px solid #bbf7d0'
+                                            }}>
+                                                <div style={{ fontSize: '13px', fontWeight: 600, color: '#166534', marginBottom: '4px' }}>
+                                                    ✅ {p.titulo}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: '#15803d', lineHeight: 1.5 }}>
+                                                    {p.descripcion}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Weaknesses */}
+                                <div>
+                                    <h4 style={{
+                                        fontSize: '13px', fontWeight: 700, color: '#dc2626',
+                                        display: 'flex', alignItems: 'center', gap: '6px',
+                                        marginBottom: '12px'
+                                    }}>
+                                        <TrendingDown size={16} /> Puntos a Mejorar
+                                    </h4>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                        {(aiProfile.puntos_debiles || []).map((p, i) => (
+                                            <div key={i} style={{
+                                                padding: '12px 16px', borderRadius: '10px',
+                                                background: '#fef2f2', border: '1px solid #fecaca'
+                                            }}>
+                                                <div style={{ fontSize: '13px', fontWeight: 600, color: '#991b1b', marginBottom: '4px' }}>
+                                                    ⚠️ {p.titulo}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: '#b91c1c', lineHeight: 1.5 }}>
+                                                    {p.descripcion}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Recommendations */}
+                            <div style={{ marginBottom: '24px' }}>
+                                <h4 style={{
+                                    fontSize: '13px', fontWeight: 700, color: '#1e293b',
+                                    display: 'flex', alignItems: 'center', gap: '6px',
+                                    marginBottom: '12px'
+                                }}>
+                                    <Target size={16} style={{ color: '#6d28d9' }} /> Recomendaciones de Mejora
+                                </h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {(aiProfile.recomendaciones || []).map((r, i) => {
+                                        const pStyle = getPriorityStyle(r.prioridad)
+                                        return (
+                                            <div key={i} style={{
+                                                padding: '12px 16px', borderRadius: '10px',
+                                                background: pStyle.bg, border: `1px solid ${pStyle.border}`,
+                                                display: 'flex', gap: '12px', alignItems: 'flex-start'
+                                            }}>
+                                                <span style={{ fontSize: '16px', flexShrink: 0 }}>{pStyle.icon}</span>
+                                                <div>
+                                                    <div style={{ fontSize: '13px', fontWeight: 600, color: pStyle.color, marginBottom: '2px' }}>
+                                                        {r.titulo}
+                                                        <span style={{
+                                                            fontSize: '10px', fontWeight: 500,
+                                                            marginLeft: '8px', padding: '2px 8px',
+                                                            borderRadius: '100px', background: pStyle.color + '15',
+                                                            color: pStyle.color, textTransform: 'uppercase'
+                                                        }}>
+                                                            {r.prioridad}
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5 }}>
+                                                        {r.descripcion}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Communication Profile */}
+                            {aiProfile.perfil_comunicacion && (
+                                <div style={{
+                                    padding: '16px 20px', borderRadius: '12px',
+                                    background: 'linear-gradient(135deg, #faf5ff, #f5f3ff)',
+                                    border: '1px solid #e9d5ff'
+                                }}>
+                                    <h4 style={{
+                                        fontSize: '13px', fontWeight: 700, color: '#6d28d9',
+                                        marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px'
+                                    }}>
+                                        <MessageSquare size={16} /> Perfil de Comunicación
+                                    </h4>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 600, marginBottom: '4px' }}>
+                                                Estilo Dominante
+                                            </div>
+                                            <div style={{ fontSize: '13px', color: '#4c1d95' }}>
+                                                {aiProfile.perfil_comunicacion.estilo_dominante}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 600, marginBottom: '4px' }}>
+                                                Palabras Frecuentes
+                                            </div>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                {(aiProfile.perfil_comunicacion.palabras_frecuentes || []).map(w => (
+                                                    <span key={w} style={{
+                                                        fontSize: '11px', padding: '2px 10px',
+                                                        borderRadius: '100px', background: '#ede9fe',
+                                                        color: '#6d28d9'
+                                                    }}>{w}</span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 600, marginBottom: '4px' }}>
+                                                Nivel de Empatía
+                                            </div>
+                                            <span className={`badge ${aiProfile.perfil_comunicacion.nivel_empatia === 'alto' ? 'positive' : aiProfile.perfil_comunicacion.nivel_empatia === 'medio' ? 'warning' : 'negative'}`}>
+                                                {aiProfile.perfil_comunicacion.nivel_empatia}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 600, marginBottom: '4px' }}>
+                                                Nivel de Proactividad
+                                            </div>
+                                            <span className={`badge ${aiProfile.perfil_comunicacion.nivel_proactividad === 'alto' ? 'positive' : aiProfile.perfil_comunicacion.nivel_proactividad === 'medio' ? 'warning' : 'negative'}`}>
+                                                {aiProfile.perfil_comunicacion.nivel_proactividad}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     )

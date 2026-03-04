@@ -400,3 +400,29 @@ export function exportToCSV(data, filename) {
     link.click()
     URL.revokeObjectURL(link.href)
 }
+
+// ===================== AGENT AI PROFILE =====================
+export async function fetchAgentProfile(agentName, dateFrom = null, dateTo = null) {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+    const body = { agent_name: agentName }
+    if (dateFrom) body.date_from = dateFrom
+    if (dateTo) body.date_to = dateTo
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/analyze-agent`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseAnonKey}`,
+        },
+        body: JSON.stringify(body)
+    })
+
+    if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.error || 'Error al generar perfil del agente')
+    }
+
+    return await response.json()
+}
