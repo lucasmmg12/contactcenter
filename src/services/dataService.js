@@ -587,6 +587,27 @@ export async function fetchAgentList() {
 }
 
 // ===================== PROBLEMATIC CHATS =====================
+// ===================== RISK TICKET IDS (lightweight) =====================
+export async function fetchRiskTicketIds() {
+    const { data, error } = await supabase
+        .from('cc_analysis')
+        .select('ticket_id, overall_sentiment, sentiment_score')
+
+    if (error) throw error
+
+    const riskIds = new Set()
+        ; (data || []).forEach(a => {
+            if (
+                a.overall_sentiment === 'frustrated' ||
+                a.overall_sentiment === 'negative' ||
+                (a.sentiment_score !== null && a.sentiment_score < -0.3)
+            ) {
+                riskIds.add(a.ticket_id)
+            }
+        })
+    return riskIds
+}
+
 export async function fetchProblematicChats(dateFrom = null, dateTo = null) {
     let query = supabase
         .from('cc_tickets')

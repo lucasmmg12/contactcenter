@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { MessageSquare, ChevronRight, X, User, Bot as BotIcon, Info, Phone, Mail, MapPin, Calendar, Shield, Stethoscope, Download, Image as ImageIcon } from 'lucide-react'
-import { fetchTickets, fetchTicketDetail, fetchAgentList, exportToCSV } from '../services/dataService'
+import { MessageSquare, ChevronRight, X, User, Bot as BotIcon, Info, Phone, Mail, MapPin, Calendar, Shield, Stethoscope, Download, Image as ImageIcon, AlertTriangle } from 'lucide-react'
+import { fetchTickets, fetchTicketDetail, fetchAgentList, fetchRiskTicketIds, exportToCSV } from '../services/dataService'
 import { format } from 'date-fns'
 
 // Check if a string is an image URL
@@ -36,13 +36,18 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
     const [detailLoading, setDetailLoading] = useState(false)
     const [lightboxUrl, setLightboxUrl] = useState(null)
 
+    // Risk tickets
+    const [riskIds, setRiskIds] = useState(new Set())
+    const [filterRisk, setFilterRisk] = useState(false)
+    const [riskTicketsCache, setRiskTicketsCache] = useState([])
+
     // Filters
     const [filterAgent, setFilterAgent] = useState('')
     const [page, setPage] = useState(0)
     const PAGE_SIZE = 20
 
-    useEffect(() => { loadAgents() }, [])
-    useEffect(() => { loadTickets() }, [filterAgent, page])
+    useEffect(() => { loadAgents(); loadRiskIds() }, [])
+    useEffect(() => { if (!filterRisk) loadTickets() }, [filterAgent, page, filterRisk])
 
     // Auto-open a ticket when navigated from Overview
     useEffect(() => {
@@ -59,6 +64,13 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
         } catch (err) { console.error('Error loading agents:', err) }
     }
 
+    async function loadRiskIds() {
+        try {
+            const ids = await fetchRiskTicketIds()
+            setRiskIds(ids)
+        } catch (err) { console.error('Error loading risk ids:', err) }
+    }
+
     async function loadTickets() {
         try {
             setLoading(true)
@@ -70,6 +82,30 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
             setTotal(count)
         } catch (err) { console.error('Error loading tickets:', err) }
         finally { setLoading(false) }
+    }
+
+    // When risk filter is toggled ON, fetch ALL tickets and filter client-side
+    async function loadRiskTickets() {
+        try {
+            setLoading(true)
+            // Fetch a larger batch to find risk ones
+            const { tickets: data } = await fetchTickets({
+                limit: 1000, offset: 0,
+                agent: filterAgent || null,
+            })
+            const riskOnly = data.filter(t => riskIds.has(t.ticket_id))
+            setRiskTicketsCache(riskOnly)
+        } catch (err) { console.error('Error loading risk tickets:', err) }
+        finally { setLoading(false) }
+    }
+
+    function toggleRiskFilter() {
+        const newVal = !filterRisk
+        setFilterRisk(newVal)
+        setPage(0)
+        if (newVal) {
+            loadRiskTickets()
+        }
     }
 
     async function openDetail(ticketId) {
@@ -126,41 +162,62 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
         }
     }
 
-    const totalPages = Math.ceil(total / PAGE_SIZE)
+    // Determine which tickets to display
+    const displayTickets = filterRisk ? riskTicketsCache : tickets
+    const displayTotal = filterRisk ? riskTicketsCache.length : total
+    const totalPages = filterRisk ? 1 : Math.ceil(total / PAGE_SIZE)
+    const riskCount = riskIds.size
 
     return (
         <div className="fade-in" style={{ display: 'flex', gap: '0', height: 'calc(100vh - var(--header-height) - 48px)' }}>
             {/* Left: List */}
             <div style={{ flex: selectedTicket ? '0 0 42%' : '1', display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'flex 0.3s ease' }}>
-                <div className="filters-bar" style={{ padding: '0 0 12px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div className="filters-bar" style={{ padding: '0 0 12px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <select className="filter-select" value={filterAgent} onChange={(e) => { setFilterAgent(e.target.value); setPage(0) }}>
                         <option value="">Todos los agentes</option>
                         {agents.map(a => <option key={a} value={a}>{a}</option>)}
                     </select>
-                    <span style={{ fontSize: '12px', color: '#94a3b8' }}>{total} conversaciones</span>
+
+                    {/* Risk filter toggle */}
+                    <button
+                        className={`risk-filter-btn ${filterRisk ? 'active' : ''}`}
+                        onClick={toggleRiskFilter}
+                        title={filterRisk ? 'Mostrar todos los chats' : 'Filtrar solo chats en riesgo'}
+                    >
+                        <AlertTriangle size={13} />
+                        En Riesgo
+                        {riskCount > 0 && (
+                            <span className="risk-filter-count">{riskCount}</span>
+                        )}
+                    </button>
+
+                    <span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: 'auto' }}>
+                        {filterRisk ? `${displayTotal} en riesgo` : `${total} conversaciones`}
+                    </span>
                 </div>
 
                 <div className="card" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ flex: 1, overflowY: 'auto' }}>
                         {loading ? (
                             <div className="loading-spinner"><div className="spinner"></div></div>
-                        ) : tickets.length === 0 ? (
+                        ) : displayTickets.length === 0 ? (
                             <div className="empty-state">
                                 <MessageSquare />
-                                <h3>Sin conversaciones</h3>
-                                <p>No se encontraron conversaciones con los filtros aplicados.</p>
+                                <h3>{filterRisk ? 'Sin chats en riesgo' : 'Sin conversaciones'}</h3>
+                                <p>{filterRisk ? 'No hay chats problemáticos con los filtros actuales.' : 'No se encontraron conversaciones con los filtros aplicados.'}</p>
                             </div>
                         ) : (
                             <table className="data-table">
                                 <thead>
                                     <tr>
+                                        <th></th>
                                         <th>Ticket</th>
                                         <th>Cliente</th>
                                         <th>Agente</th>
-                                        <th title="Sentimiento: cómo se sintió el paciente. Positivo = conforme, Neutral = sin emoción clara, Negativo/Frustrated = insatisfecho.">
+                                        <th title="Sentimiento: cómo se sintió el paciente.">
                                             Sentimiento
                                         </th>
-                                        <th title="Intención: el motivo real por el cual el paciente se comunicó (ej: solicitar turno, cancelar turno, consulta).">
+                                        <th title="Intención: el motivo real por el cual el paciente se comunicó.">
                                             Intención
                                         </th>
                                         <th>Fecha</th>
@@ -168,15 +225,41 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {tickets.map(ticket => {
+                                    {displayTickets.map(ticket => {
                                         const analysis = Array.isArray(ticket.cc_analysis) ? ticket.cc_analysis[0] : ticket.cc_analysis
+                                        const isRisk = riskIds.has(ticket.ticket_id)
                                         return (
                                             <tr
                                                 key={ticket.ticket_id}
-                                                style={{ cursor: 'pointer', background: selectedTicket === ticket.ticket_id ? '#e8f4fc' : undefined }}
+                                                className={isRisk ? 'row-risk' : ''}
+                                                style={{
+                                                    cursor: 'pointer',
+                                                    background: selectedTicket === ticket.ticket_id
+                                                        ? '#e8f4fc'
+                                                        : isRisk
+                                                            ? '#fef2f2'
+                                                            : undefined,
+                                                }}
                                                 onClick={() => openDetail(ticket.ticket_id)}
                                             >
-                                                <td><code style={{ fontSize: '11px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>{ticket.ticket_id}</code></td>
+                                                <td style={{ width: '24px', padding: '8px 4px 8px 12px' }}>
+                                                    {isRisk && (
+                                                        <span className="risk-dot" title="Chat en riesgo">
+                                                            <AlertTriangle size={13} color="#ef4444" />
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    <code style={{
+                                                        fontSize: '11px',
+                                                        background: isRisk ? '#fee2e2' : '#f1f5f9',
+                                                        color: isRisk ? '#991b1b' : undefined,
+                                                        padding: '2px 6px',
+                                                        borderRadius: '4px',
+                                                    }}>
+                                                        {ticket.ticket_id}
+                                                    </code>
+                                                </td>
                                                 <td style={{ fontWeight: 500 }}>{ticket.customer_name || '—'}</td>
                                                 <td>
                                                     {ticket.agent_name
@@ -191,7 +274,7 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
                                                     </span>
                                                 </td>
                                                 <td style={{ fontSize: '12px', color: '#64748b' }}>{formatDate(ticket.received_at)}</td>
-                                                <td><ChevronRight size={14} color="#94a3b8" /></td>
+                                                <td><ChevronRight size={14} color={isRisk ? '#ef4444' : '#94a3b8'} /></td>
                                             </tr>
                                         )
                                     })}
@@ -200,7 +283,7 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
                         )}
                     </div>
 
-                    {totalPages > 1 && (
+                    {!filterRisk && totalPages > 1 && (
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', padding: '12px', borderTop: '1px solid #e2e8f0' }}>
                             <button className="btn btn-secondary btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Anterior</button>
                             <span style={{ fontSize: '12px', color: '#64748b', display: 'flex', alignItems: 'center' }}>Pág {page + 1} de {totalPages}</span>
@@ -218,11 +301,19 @@ export default function ConversationsPanel({ initialTicketId, onTicketConsumed }
                 }}>
                     <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                         {/* Header */}
-                        <div className="card-header" style={{ flexShrink: 0, borderBottom: '2px solid var(--blue-100)' }}>
+                        <div className="card-header" style={{
+                            flexShrink: 0,
+                            borderBottom: riskIds.has(selectedTicket) ? '2px solid #ef4444' : '2px solid var(--blue-100)',
+                        }}>
                             <div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     <h3 style={{ margin: 0 }}>Conversación {selectedTicket}</h3>
                                     {detailData?.ticket && getChannelBadge(detailData.ticket.channel)}
+                                    {riskIds.has(selectedTicket) && (
+                                        <span className="badge frustrated" style={{ fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                            <AlertTriangle size={10} /> EN RIESGO
+                                        </span>
+                                    )}
                                 </div>
                                 {detailData?.ticket && (
                                     <span style={{ fontSize: '12px', color: '#94a3b8' }}>

@@ -1717,6 +1717,85 @@ body {
 }
 
 /* ===================== RESPONSIVE ===================== */
+/* ===================== RISK FILTER & RISK ROWS ===================== */
+.risk-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 100px;
+  border: 1.5px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.risk-filter-btn:hover {
+  border-color: #fca5a5;
+  color: #ef4444;
+  background: #fef2f2;
+}
+
+.risk-filter-btn.active {
+  background: #ef4444;
+  color: white;
+  border-color: #ef4444;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.25);
+}
+
+.risk-filter-btn.active:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.risk-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 100px;
+  background: #fef2f2;
+  color: #ef4444;
+  line-height: 1;
+}
+
+.risk-filter-btn.active .risk-filter-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: white;
+}
+
+.row-risk {
+  border-left: 3px solid #ef4444;
+}
+
+.row-risk:hover {
+  background: #fef2f2 !important;
+}
+
+.risk-dot {
+  display: inline-flex;
+  animation: risk-pulse 2s ease-in-out infinite;
+}
+
+@keyframes risk-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
 @media (max-width: 1024px) {
 
   .grid-2,
