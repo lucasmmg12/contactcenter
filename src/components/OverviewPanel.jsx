@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
     MessageSquare, ArrowRightLeft, Smile, Shield, Clock,
-    TrendingUp, TrendingDown, AlertTriangle, Download, Zap, ChevronRight, Timer
+    TrendingUp, TrendingDown, AlertTriangle, Download, Zap, ChevronRight, Timer, CalendarDays
 } from 'lucide-react'
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -19,6 +19,8 @@ const SENTIMENT_COLORS = {
 }
 
 const PIE_COLORS = ['#1a6bb5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+
+const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 
 export default function OverviewPanel({ onNavigateToChat }) {
     const [stats, setStats] = useState(null)
@@ -90,6 +92,15 @@ export default function OverviewPanel({ onNavigateToChat }) {
 
     const deptData = Object.entries(stats.deptDist)
         .sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }))
+
+    // Day of week data - reorder to start from Monday
+    const reorderedDays = [1, 2, 3, 4, 5, 6, 0] // Mon-Sun
+    const maxDayCount = Math.max(...(stats.dailyDist || [0]))
+    const dailyData = reorderedDays.map(dayIndex => ({
+        name: DAY_LABELS[dayIndex],
+        chats: stats.dailyDist?.[dayIndex] || 0,
+        fill: stats.dailyDist?.[dayIndex] === maxDayCount && maxDayCount > 0 ? '#0d9488' : '#5eead4',
+    }))
 
     const formatSeconds = (seconds) => {
         if (!seconds) return '—'
@@ -312,7 +323,7 @@ export default function OverviewPanel({ onNavigateToChat }) {
                 </div>
             )}
 
-            {/* Charts Row 1 */}
+            {/* Charts Row 1: Temporal */}
             <div className="grid-2">
                 <div className="card">
                     <div className="card-header">
@@ -335,6 +346,38 @@ export default function OverviewPanel({ onNavigateToChat }) {
 
                 <div className="card">
                     <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <CalendarDays size={16} color="#0d9488" />
+                            <h3 title="Cantidad de chats recibidos agrupados por día de la semana. El día con mayor volumen se resalta.">Chats por Día de la Semana</h3>
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={dailyData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 500 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip
+                                        contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }}
+                                        formatter={(value) => [`${value} chats`, 'Cantidad']}
+                                    />
+                                    <Bar dataKey="chats" radius={[6, 6, 0, 0]}>
+                                        {dailyData.map((entry, i) => (
+                                            <Cell key={i} fill={entry.fill} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Charts Row 2: Sentimiento */}
+            <div className="grid-2">
+                <div className="card">
+                    <div className="card-header">
                         <h3 title="Proporción de pacientes con experiencia positiva, neutra, negativa o frustrada.">Distribución de Sentimiento</h3>
                     </div>
                     <div className="card-body">
@@ -355,7 +398,7 @@ export default function OverviewPanel({ onNavigateToChat }) {
                 </div>
             </div>
 
-            {/* Charts Row 2 */}
+            {/* Charts Row 3: Intenciones + Bot */}
             <div className="grid-2">
                 <div className="card">
                     <div className="card-header">

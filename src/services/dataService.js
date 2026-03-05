@@ -140,11 +140,19 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         }
     })
 
+    // Day of week distribution (0=Sunday, 1=Monday, ..., 6=Saturday)
+    const dailyDist = Array(7).fill(0)
+    tickets?.forEach(t => {
+        if (t.chat_started_at) {
+            const day = new Date(t.chat_started_at).getDay()
+            dailyDist[day]++
+        }
+    })
+
     return {
         totalChats,
         transferRate: parseFloat(transferRate),
         avgSentiment: parseFloat(avgSentiment),
-        avgProtocol: parseFloat(avgProtocol),
         avgResponseTime,
         avgHandoffTime,
         maxHandoffTime,
@@ -155,6 +163,7 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         deptDist,
         botPathDist,
         hourlyDist,
+        dailyDist,
     }
 }
 
