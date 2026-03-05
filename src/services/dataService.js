@@ -62,21 +62,27 @@ export async function fetchTicketDetail(ticketId) {
 
 // ===================== OVERVIEW STATS =====================
 export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
+    // Fetch ALL tickets (no date filter) for historical context
+    const { data: allTickets } = await supabase.from('cc_tickets').select('ticket_id, chat_started_at, received_at, agent_name, transferred_to_agent, bot_handoff_seconds')
+
+    // Fetch filtered tickets for current view
     let ticketQuery = supabase.from('cc_tickets').select('*', { count: 'exact' })
     if (dateFrom) ticketQuery = ticketQuery.gte('received_at', dateFrom)
     if (dateTo) ticketQuery = ticketQuery.lte('received_at', dateTo)
-
     const { data: tickets, count: totalTickets } = await ticketQuery
 
+    // Fetch analyses for filtered tickets
     let analysisQuery = supabase.from('cc_analysis').select('*')
     if (tickets && tickets.length > 0) {
         const ticketIds = tickets.map(t => t.ticket_id)
         analysisQuery = analysisQuery.in('ticket_id', ticketIds)
     }
-
     const { data: analyses } = await analysisQuery
 
-    // Calculate KPIs
+    // Fetch ALL analyses for historical trends
+    const { data: allAnalyses } = await supabase.from('cc_analysis').select('ticket_id, overall_sentiment, sentiment_score, detected_intent, customer_keywords, bot_resolution, bot_first_choice, analyzed_at')
+
+    // ─── BASIC KPIs ───
     const totalChats = totalTickets || 0
     const transferred = tickets?.filter(t => t.transferred_to_agent).length || 0
     const transferRate = totalChats > 0 ? ((transferred / totalChats) * 100).toFixed(1) : 0
@@ -86,22 +92,14 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         ? (sentimentScores.reduce((a, b) => a + b, 0) / sentimentScores.length).toFixed(2)
         : 0
 
-
-    const responseTimes = analyses?.filter(a => a.first_response_time_seconds !== null).map(a => a.first_response_time_seconds) || []
-    const avgResponseTime = responseTimes.length > 0
-        ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
-        : 0
-
-    // Bot handoff metrics (time between bot last msg and human agent first msg)
+    // Bot handoff
     const handoffTimes = tickets?.filter(t => t.bot_handoff_seconds !== null && t.bot_handoff_seconds > 0).map(t => t.bot_handoff_seconds) || []
     const avgHandoffTime = handoffTimes.length > 0
         ? Math.round(handoffTimes.reduce((a, b) => a + b, 0) / handoffTimes.length)
         : 0
-    const maxHandoffTime = handoffTimes.length > 0 ? Math.max(...handoffTimes) : 0
-    const minHandoffTime = handoffTimes.length > 0 ? Math.min(...handoffTimes) : 0
     const handoffCount = handoffTimes.length
 
-    // Sentiment distribution
+    // ─── SENTIMENT DISTRIBUTION ───
     const sentimentDist = { positive: 0, neutral: 0, negative: 0, frustrated: 0 }
     analyses?.forEach(a => {
         if (a.overall_sentiment && sentimentDist.hasOwnProperty(a.overall_sentiment)) {
@@ -109,7 +107,7 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         }
     })
 
-    // Intent distribution
+    // ─── INTENT DISTRIBUTION ───
     const intentDist = {}
     analyses?.forEach(a => {
         if (a.detected_intent) {
@@ -117,21 +115,14 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         }
     })
 
-    // Department distribution
-    const deptDist = {}
-    tickets?.forEach(t => {
-        const dept = t.department_name || 'Sin departamento'
-        deptDist[dept] = (deptDist[dept] || 0) + 1
-    })
-
-    // Bot path distribution (first choice)
+    // ─── BOT PATH DISTRIBUTION ───
     const botPathDist = {}
     analyses?.forEach(a => {
         const choice = a.bot_first_choice || 'No detectado'
         botPathDist[choice] = (botPathDist[choice] || 0) + 1
     })
 
-    // Hourly distribution
+    // ─── HOURLY DISTRIBUTION ───
     const hourlyDist = Array(24).fill(0)
     tickets?.forEach(t => {
         if (t.chat_started_at) {
@@ -140,7 +131,7 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         }
     })
 
-    // Day of week distribution (0=Sunday, 1=Monday, ..., 6=Saturday)
+    // ─── DAY OF WEEK DISTRIBUTION ───
     const dailyDist = Array(7).fill(0)
     tickets?.forEach(t => {
         if (t.chat_started_at) {
@@ -149,21 +140,270 @@ export async function fetchOverviewStats(dateFrom = null, dateTo = null) {
         }
     })
 
+    // ─── HEATMAP: HOUR × DAY MATRIX ───
+    // 7 rows (days) × 24 cols (hours), values = chat count
+    const heatmapData = Array.from({ length: 7 }, () => Array(24).fill(0))
+    tickets?.forEach(t => {
+        if (t.chat_started_at) {
+            const d = new Date(t.chat_started_at)
+            heatmapData[d.getDay()][d.getHours()]++
+        }
+    })
+
+    // ─── WEEKLY TREND (using ALL tickets, last 8 weeks) ───
+    const now = new Date()
+    const weeklyTrend = []
+    for (let w = 7; w >= 0; w--) {
+        const weekStart = new Date(now)
+        weekStart.setDate(now.getDate() - (w * 7) - now.getDay() + 1) // Monday
+        weekStart.setHours(0, 0, 0, 0)
+        const weekEnd = new Date(weekStart)
+        weekEnd.setDate(weekStart.getDate() + 6)
+        weekEnd.setHours(23, 59, 59, 999)
+
+        const weekChats = (allTickets || []).filter(t => {
+            if (!t.chat_started_at) return false
+            const d = new Date(t.chat_started_at)
+            return d >= weekStart && d <= weekEnd
+        }).length
+
+        const label = `${weekStart.getDate()}/${weekStart.getMonth() + 1}`
+        weeklyTrend.push({ label, chats: weekChats, weekStart: weekStart.toISOString() })
+    }
+    // Calculate variation vs previous week
+    const currentWeekChats = weeklyTrend[weeklyTrend.length - 1]?.chats || 0
+    const prevWeekChats = weeklyTrend[weeklyTrend.length - 2]?.chats || 0
+    const weeklyVariation = prevWeekChats > 0
+        ? (((currentWeekChats - prevWeekChats) / prevWeekChats) * 100).toFixed(1)
+        : 0
+
+    // ─── SENTIMENT WEEKLY TREND (last 8 weeks) ───
+    const sentimentTrend = []
+    const allTicketsMap = new Map((allTickets || []).map(t => [t.ticket_id, t]))
+    for (let w = 7; w >= 0; w--) {
+        const weekStart = new Date(now)
+        weekStart.setDate(now.getDate() - (w * 7) - now.getDay() + 1)
+        weekStart.setHours(0, 0, 0, 0)
+        const weekEnd = new Date(weekStart)
+        weekEnd.setDate(weekStart.getDate() + 6)
+        weekEnd.setHours(23, 59, 59, 999)
+
+        const weekAnalyses = (allAnalyses || []).filter(a => {
+            const ticket = allTicketsMap.get(a.ticket_id)
+            if (!ticket?.chat_started_at) return false
+            const d = new Date(ticket.chat_started_at)
+            return d >= weekStart && d <= weekEnd
+        })
+
+        const scores = weekAnalyses.filter(a => a.sentiment_score !== null).map(a => a.sentiment_score)
+        const avgScore = scores.length > 0
+            ? parseFloat((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2))
+            : null
+
+        const negCount = weekAnalyses.filter(a =>
+            a.overall_sentiment === 'negative' || a.overall_sentiment === 'frustrated'
+        ).length
+
+        const label = `${weekStart.getDate()}/${weekStart.getMonth() + 1}`
+        sentimentTrend.push({
+            label,
+            avgScore,
+            negativeCount: negCount,
+            total: weekAnalyses.length,
+            negativeRate: weekAnalyses.length > 0 ? parseFloat(((negCount / weekAnalyses.length) * 100).toFixed(1)) : 0,
+        })
+    }
+
+    // ─── 7-DAY DEMAND FORECAST ───
+    // Weighted moving average by day of week (last 4 weeks)
+    const forecast = []
+    const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+    for (let d = 1; d <= 7; d++) {
+        const targetDate = new Date(now)
+        targetDate.setDate(now.getDate() + d)
+        const dayOfWeek = targetDate.getDay()
+
+        // Get counts for this day of week in last 4 weeks
+        const historicalCounts = []
+        for (let w = 1; w <= 4; w++) {
+            const refDate = new Date(targetDate)
+            refDate.setDate(targetDate.getDate() - (w * 7))
+            const refStart = new Date(refDate)
+            refStart.setHours(0, 0, 0, 0)
+            const refEnd = new Date(refDate)
+            refEnd.setHours(23, 59, 59, 999)
+
+            const count = (allTickets || []).filter(t => {
+                if (!t.chat_started_at) return false
+                const td = new Date(t.chat_started_at)
+                return td >= refStart && td <= refEnd
+            }).length
+            historicalCounts.push(count)
+        }
+
+        // Weighted average: more recent weeks get higher weight
+        const weights = [4, 3, 2, 1]
+        const totalWeight = weights.reduce((a, b) => a + b, 0)
+        const weightedAvg = historicalCounts.length > 0
+            ? Math.round(historicalCounts.reduce((sum, c, i) => sum + c * (weights[i] || 1), 0) / totalWeight)
+            : 0
+
+        // Trend factor
+        const trendFactor = prevWeekChats > 0 && currentWeekChats > 0
+            ? currentWeekChats / prevWeekChats
+            : 1
+        const adjusted = Math.round(weightedAvg * Math.min(Math.max(trendFactor, 0.7), 1.3))
+
+        forecast.push({
+            day: dayLabels[dayOfWeek],
+            date: `${targetDate.getDate()}/${targetDate.getMonth() + 1}`,
+            predicted: adjusted,
+            historical: weightedAvg,
+        })
+    }
+
+    // ─── SMART ALERTS ───
+    const alerts = []
+
+    // Alert: Agent overload (today)
+    const todayStart = new Date(now)
+    todayStart.setHours(0, 0, 0, 0)
+    const todayTickets = (allTickets || []).filter(t => {
+        if (!t.chat_started_at) return false
+        return new Date(t.chat_started_at) >= todayStart
+    })
+    const agentLoadToday = {}
+    todayTickets.forEach(t => {
+        if (t.agent_name) {
+            agentLoadToday[t.agent_name] = (agentLoadToday[t.agent_name] || 0) + 1
+        }
+    })
+    const totalToday = todayTickets.length
+    Object.entries(agentLoadToday).forEach(([name, count]) => {
+        if (totalToday > 3 && count / totalToday > 0.5) {
+            alerts.push({
+                type: 'warning',
+                icon: '👤',
+                message: `${name} tiene ${Math.round((count / totalToday) * 100)}% de los chats de hoy (${count}/${totalToday})`,
+            })
+        }
+    })
+
+    // Alert: Emerging keywords (last 7 days vs previous 7 days)
+    const sevenDaysAgo = new Date(now)
+    sevenDaysAgo.setDate(now.getDate() - 7)
+    const fourteenDaysAgo = new Date(now)
+    fourteenDaysAgo.setDate(now.getDate() - 14)
+
+    const recentKeywords = {}
+    const previousKeywords = {}
+        ; (allAnalyses || []).forEach(a => {
+            const ticket = allTicketsMap.get(a.ticket_id)
+            if (!ticket?.chat_started_at || !a.customer_keywords) return
+            const d = new Date(ticket.chat_started_at)
+
+            if (d >= sevenDaysAgo) {
+                a.customer_keywords.forEach(kw => {
+                    recentKeywords[kw] = (recentKeywords[kw] || 0) + 1
+                })
+            } else if (d >= fourteenDaysAgo && d < sevenDaysAgo) {
+                a.customer_keywords.forEach(kw => {
+                    previousKeywords[kw] = (previousKeywords[kw] || 0) + 1
+                })
+            }
+        })
+
+    const emergingKeywords = []
+    Object.entries(recentKeywords).forEach(([kw, count]) => {
+        const prev = previousKeywords[kw] || 0
+        if (count >= 3 && (prev === 0 || count / prev >= 2)) {
+            emergingKeywords.push({ keyword: kw, current: count, previous: prev })
+        }
+    })
+    emergingKeywords.sort((a, b) => b.current - a.current)
+
+    if (emergingKeywords.length > 0) {
+        const top = emergingKeywords[0]
+        const increment = top.previous > 0 ? `+${Math.round(((top.current - top.previous) / top.previous) * 100)}%` : 'NUEVA'
+        alerts.push({
+            type: 'info',
+            icon: '🔍',
+            message: `Keyword "${top.keyword}" en alza: ${top.current} menciones esta semana (${increment})`,
+        })
+    }
+
+    // Alert: High negative sentiment rate this week
+    const thisWeekSentiment = sentimentTrend[sentimentTrend.length - 1]
+    if (thisWeekSentiment && thisWeekSentiment.negativeRate > 25) {
+        alerts.push({
+            type: 'danger',
+            icon: '😠',
+            message: `${thisWeekSentiment.negativeRate}% de chats con sentimiento negativo esta semana`,
+        })
+    }
+
+    // Alert: High conflict chats today
+    const todayConflicts = (analyses || []).filter(a => {
+        const ticket = tickets?.find(t => t.ticket_id === a.ticket_id)
+        if (!ticket?.chat_started_at) return false
+        return new Date(ticket.chat_started_at) >= todayStart &&
+            (a.sentiment_score !== null && a.sentiment_score < -0.3 || a.overall_sentiment === 'frustrated')
+    }).length
+    if (todayConflicts > 0) {
+        alerts.push({
+            type: 'danger',
+            icon: '⚠️',
+            message: `${todayConflicts} chat${todayConflicts > 1 ? 's' : ''} en riesgo de conflicto hoy`,
+        })
+    }
+
+    // ─── BOT EFFICIENCY ───
+    const botResolved = analyses?.filter(a => a.bot_resolution === true).length || 0
+    const botTotal = analyses?.length || 0
+    const botResolutionRate = botTotal > 0 ? parseFloat(((botResolved / botTotal) * 100).toFixed(1)) : 0
+
+    // Paths that generate most transfers
+    const pathTransferRate = {}
+    analyses?.forEach(a => {
+        const path = a.bot_first_choice || 'No detectado'
+        if (!pathTransferRate[path]) pathTransferRate[path] = { total: 0, transferred: 0 }
+        pathTransferRate[path].total++
+        const ticket = tickets?.find(t => t.ticket_id === a.ticket_id)
+        if (ticket?.transferred_to_agent) pathTransferRate[path].transferred++
+    })
+    const botPathTransferRates = Object.entries(pathTransferRate)
+        .map(([path, data]) => ({
+            path,
+            total: data.total,
+            transferred: data.transferred,
+            rate: data.total > 0 ? parseFloat(((data.transferred / data.total) * 100).toFixed(1)) : 0,
+        }))
+        .sort((a, b) => b.rate - a.rate)
+
     return {
         totalChats,
         transferRate: parseFloat(transferRate),
         avgSentiment: parseFloat(avgSentiment),
-        avgResponseTime,
         avgHandoffTime,
-        maxHandoffTime,
-        minHandoffTime,
         handoffCount,
         sentimentDist,
         intentDist,
-        deptDist,
         botPathDist,
         hourlyDist,
         dailyDist,
+        // New metrics
+        heatmapData,
+        weeklyTrend,
+        weeklyVariation: parseFloat(weeklyVariation),
+        currentWeekChats,
+        sentimentTrend,
+        forecast,
+        alerts,
+        emergingKeywords: emergingKeywords.slice(0, 5),
+        botResolutionRate,
+        botPathTransferRates,
+        agentLoadToday,
+        totalToday,
     }
 }
 

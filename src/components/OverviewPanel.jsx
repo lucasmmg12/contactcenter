@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import {
-    MessageSquare, ArrowRightLeft, Smile, Shield, Clock,
-    TrendingUp, TrendingDown, AlertTriangle, Download, Zap, ChevronRight, Timer, CalendarDays
+    MessageSquare, Smile, Clock,
+    TrendingUp, TrendingDown, AlertTriangle, Download, Zap, ChevronRight, Timer,
+    CalendarDays, Bot, Activity, Search, Users, BarChart3
 } from 'lucide-react'
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    PieChart, Pie, Cell, AreaChart, Area, Legend
+    PieChart, Pie, Cell, AreaChart, Area, Legend, LineChart, Line, ComposedChart,
+    ReferenceLine
 } from 'recharts'
 import { fetchOverviewStats, fetchProblematicChats, exportToCSV } from '../services/dataService'
 import { format } from 'date-fns'
@@ -18,9 +20,17 @@ const SENTIMENT_COLORS = {
     frustrated: '#dc2626',
 }
 
-const PIE_COLORS = ['#1a6bb5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
-
 const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+const HEATMAP_HOURS = Array.from({ length: 14 }, (_, i) => i + 7) // 7:00 to 20:00
+
+function getHeatmapColor(value, max) {
+    if (value === 0) return '#f8fafc'
+    const intensity = Math.min(value / Math.max(max, 1), 1)
+    if (intensity < 0.25) return '#dbeafe'
+    if (intensity < 0.5) return '#93c5fd'
+    if (intensity < 0.75) return '#3b82f6'
+    return '#1d4ed8'
+}
 
 export default function OverviewPanel({ onNavigateToChat }) {
     const [stats, setStats] = useState(null)
@@ -87,20 +97,33 @@ export default function OverviewPanel({ onNavigateToChat }) {
         hour: `${hour.toString().padStart(2, '0')}:00`, chats: count,
     }))
 
-    const botPathData = Object.entries(stats.botPathDist)
-        .sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }))
-
-    const deptData = Object.entries(stats.deptDist)
-        .sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }))
-
-    // Day of week data - reorder to start from Monday
-    const reorderedDays = [1, 2, 3, 4, 5, 6, 0] // Mon-Sun
+    // Day of week data
+    const reorderedDays = [1, 2, 3, 4, 5, 6, 0]
     const maxDayCount = Math.max(...(stats.dailyDist || [0]))
     const dailyData = reorderedDays.map(dayIndex => ({
         name: DAY_LABELS[dayIndex],
         chats: stats.dailyDist?.[dayIndex] || 0,
         fill: stats.dailyDist?.[dayIndex] === maxDayCount && maxDayCount > 0 ? '#0d9488' : '#5eead4',
     }))
+
+    // Weekly trend data with forecast
+    const trendData = (stats.weeklyTrend || []).map(w => ({
+        name: w.label,
+        chats: w.chats,
+    }))
+
+    // Sentiment trend
+    const sentTrendData = (stats.sentimentTrend || []).map(w => ({
+        name: w.label,
+        score: w.avgScore,
+        negativeRate: w.negativeRate,
+    }))
+
+    // Forecast data
+    const forecastData = stats.forecast || []
+
+    // Heatmap max value
+    const heatmapMax = Math.max(...(stats.heatmapData || []).flat().filter(Boolean), 1)
 
     const formatSeconds = (seconds) => {
         if (!seconds) return '—'
@@ -110,13 +133,10 @@ export default function OverviewPanel({ onNavigateToChat }) {
         return `${min}m ${sec}s`
     }
 
-    // Semaphore logic
     const getSemaphore = (metric, value) => {
         switch (metric) {
             case 'sentiment': return value >= 0.3 ? 'green' : value >= 0 ? 'yellow' : 'red'
-            case 'transfer': return value <= 30 ? 'green' : value <= 60 ? 'yellow' : 'red'
-            case 'response': return value <= 30 ? 'green' : value <= 120 ? 'yellow' : 'red'
-            case 'handoff': return value <= 300 ? 'green' : value <= 900 ? 'yellow' : 'red' // 5min / 15min
+            case 'handoff': return value <= 300 ? 'green' : value <= 900 ? 'yellow' : 'red'
             default: return 'green'
         }
     }
@@ -130,7 +150,6 @@ export default function OverviewPanel({ onNavigateToChat }) {
             agente: p.agent_name || 'Bot',
             sentimiento: p.analysis?.overall_sentiment,
             score_sentimiento: p.analysis?.sentiment_score,
-            protocolo: 'N/A',
             intencion: p.analysis?.detected_intent,
             resumen: p.analysis?.conversation_summary,
             razones: p.reasons.join('; '),
@@ -143,30 +162,31 @@ export default function OverviewPanel({ onNavigateToChat }) {
             {/* Date Filter */}
             <DateFilter dateFrom={dateFrom} dateTo={dateTo} onChange={handleDateChange} />
 
-            {/* Executive Summary Card */}
+            {/* ═══ EXECUTIVE SUMMARY ═══ */}
             <div className="exec-card" style={{ marginBottom: '20px' }}>
                 <div className="exec-header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Zap size={16} color="#1a6bb5" />
                         <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>Resumen Ejecutivo</h3>
                     </div>
-                    {problems.length > 0 && (
-                        <span className="quality-alert danger">
-                            <AlertTriangle size={11} /> {problems.length} chat{problems.length > 1 ? 's' : ''} problemático{problems.length > 1 ? 's' : ''}
-                        </span>
-                    )}
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {stats.weeklyVariation !== 0 && (
+                            <span className={`quality-alert ${stats.weeklyVariation > 0 ? 'info' : 'warning'}`}>
+                                {stats.weeklyVariation > 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                                {stats.weeklyVariation > 0 ? '+' : ''}{stats.weeklyVariation}% vs semana pasada
+                            </span>
+                        )}
+                        {problems.length > 0 && (
+                            <span className="quality-alert danger">
+                                <AlertTriangle size={11} /> {problems.length} chat{problems.length > 1 ? 's' : ''} problemático{problems.length > 1 ? 's' : ''}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <div className="exec-kpis">
                     <div className="exec-kpi">
                         <div className="exec-kpi-value">{stats.totalChats}</div>
                         <div className="exec-kpi-label">Chats Totales</div>
-                    </div>
-                    <div className="exec-kpi">
-                        <div className="exec-kpi-value">
-                            <span className={`semaphore ${getSemaphore('transfer', stats.transferRate)}`}></span>
-                            {stats.transferRate}%
-                        </div>
-                        <div className="exec-kpi-label">Tasa Transferencia</div>
                     </div>
                     <div className="exec-kpi">
                         <div className="exec-kpi-value">
@@ -176,11 +196,8 @@ export default function OverviewPanel({ onNavigateToChat }) {
                         <div className="exec-kpi-label">Sentimiento Prom.</div>
                     </div>
                     <div className="exec-kpi">
-                        <div className="exec-kpi-value">
-                            <span className={`semaphore ${getSemaphore('response', stats.avgResponseTime)}`}></span>
-                            {formatSeconds(stats.avgResponseTime)}
-                        </div>
-                        <div className="exec-kpi-label">1ª Respuesta</div>
+                        <div className="exec-kpi-value">{stats.botResolutionRate}%</div>
+                        <div className="exec-kpi-label">Resolución Bot</div>
                     </div>
                     {stats.handoffCount > 0 && (
                         <div className="exec-kpi">
@@ -191,82 +208,334 @@ export default function OverviewPanel({ onNavigateToChat }) {
                             <div className="exec-kpi-label">Handoff Bot→Agente</div>
                         </div>
                     )}
+                    <div className="exec-kpi">
+                        <div className="exec-kpi-value">{stats.totalToday || 0}</div>
+                        <div className="exec-kpi-label">Chats Hoy</div>
+                    </div>
                 </div>
             </div>
 
-            {/* KPIs (detailed) */}
-            <div className="kpi-grid stagger">
-                <div className="kpi-card">
-                    <div className="kpi-icon blue"><MessageSquare size={22} /></div>
-                    <div className="kpi-info">
-                        <div className="kpi-label" title="Cantidad total de conversaciones recibidas a través de todos los canales (WhatsApp, Web, etc.)">Total Chats</div>
-                        <div className="kpi-value">{stats.totalChats}</div>
+            {/* ═══ SMART ALERTS ═══ */}
+            {stats.alerts && stats.alerts.length > 0 && (
+                <div className="card" style={{ marginBottom: '20px' }}>
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Activity size={16} color="#f59e0b" />
+                            <h3 style={{ margin: 0 }}>Alertas Inteligentes</h3>
+                        </div>
+                    </div>
+                    <div className="card-body" style={{ padding: '12px 20px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {stats.alerts.map((alert, i) => (
+                                <div key={i} className={`smart-alert smart-alert--${alert.type}`}>
+                                    <span className="smart-alert-icon">{alert.icon}</span>
+                                    <span className="smart-alert-msg">{alert.message}</span>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
+            )}
 
-                <div className="kpi-card">
-                    <div className="kpi-icon yellow"><ArrowRightLeft size={22} /></div>
-                    <div className="kpi-info">
-                        <div className="kpi-label" title="Porcentaje de conversaciones que el bot no pudo resolver solo y fueron derivadas a un agente humano.">Tasa Transferencia</div>
-                        <div className="kpi-value">{stats.transferRate}%</div>
-                        <div className={`kpi-change ${stats.transferRate > 50 ? 'negative' : 'positive'}`}>
-                            {stats.transferRate > 50
-                                ? <><TrendingUp size={12} /> Alta transferencia</>
-                                : <><TrendingDown size={12} /> Buen nivel</>
-                            }
+            {/* ═══ ROW 1: WEEKLY TREND + FORECAST ═══ */}
+            <div className="grid-2">
+                <div className="card">
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <TrendingUp size={16} color="#1a6bb5" />
+                            <h3 style={{ margin: 0 }}>Tendencia Semanal (8 semanas)</h3>
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={trendData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
+                                    <Area type="monotone" dataKey="chats" stroke="#1a6bb5" fill="#1a6bb5" fillOpacity={0.12} strokeWidth={2.5}
+                                        name="Chats" dot={{ r: 4, fill: '#1a6bb5' }} />
+                                </AreaChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
                 </div>
 
-                <div className="kpi-card">
-                    <div className="kpi-icon green"><Smile size={22} /></div>
-                    <div className="kpi-info">
-                        <div className="kpi-label" title="Promedio de satisfacción de los pacientes. Se mide de -1.0 (muy insatisfecho) a +1.0 (muy satisfecho).">Sentimiento Promedio</div>
-                        <div className="kpi-value">{stats.avgSentiment}</div>
-                        <div className={`kpi-change ${stats.avgSentiment >= 0 ? 'positive' : 'negative'}`}>
-                            {stats.avgSentiment >= 0 ? 'Positivo' : 'Negativo'}
+                <div className="card">
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <BarChart3 size={16} color="#8b5cf6" />
+                            <h3 style={{ margin: 0 }}>🔮 Pronóstico Próximos 7 Días</h3>
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={forecastData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis dataKey="day" tick={{ fontSize: 12, fontWeight: 500 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip
+                                        contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }}
+                                        formatter={(value, name) => [
+                                            `${value} chats`,
+                                            name === 'predicted' ? 'Pronóstico' : 'Promedio histórico'
+                                        ]}
+                                        labelFormatter={(label, payload) => {
+                                            const item = payload?.[0]?.payload
+                                            return item ? `${label} ${item.date}` : label
+                                        }}
+                                    />
+                                    <Bar dataKey="predicted" fill="#8b5cf6" radius={[6, 6, 0, 0]} name="predicted" />
+                                </BarChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
                 </div>
+            </div>
 
-
-
-                <div className="kpi-card">
-                    <div className="kpi-icon yellow"><Clock size={22} /></div>
-                    <div className="kpi-info">
-                        <div className="kpi-label" title="Tiempo promedio que tarda un agente en enviar su primer mensaje después de recibir la conversación del bot.">Tiempo 1ª Respuesta</div>
-                        <div className="kpi-value">{formatSeconds(stats.avgResponseTime)}</div>
+            {/* ═══ ROW 2: HEATMAP + CHATS POR DÍA ═══ */}
+            <div className="grid-2">
+                <div className="card">
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <CalendarDays size={16} color="#0d9488" />
+                            <h3 style={{ margin: 0 }} title="Mapa de calor: cruza día de la semana con hora del día para identificar picos de demanda.">Mapa de Calor — Demanda</h3>
+                        </div>
                     </div>
-                </div>
-
-                {stats.handoffCount > 0 && (
-                    <div className="kpi-card">
-                        <div className="kpi-icon" style={{ background: '#fef3c7', color: '#d97706' }}><Timer size={22} /></div>
-                        <div className="kpi-info">
-                            <div className="kpi-label" title="Tiempo promedio entre el último mensaje del bot y el primer mensaje del agente humano. Mide cuánto espera el paciente después de que el bot termina.">Handoff Bot → Agente</div>
-                            <div className="kpi-value">{formatSeconds(stats.avgHandoffTime)}</div>
-                            <div className={`kpi-change ${stats.avgHandoffTime <= 300 ? 'positive' : 'negative'}`}>
-                                {stats.avgHandoffTime <= 300
-                                    ? <><TrendingDown size={12} /> Buen tiempo</>
-                                    : <><TrendingUp size={12} /> Espera alta</>
-                                }
+                    <div className="card-body">
+                        <div className="heatmap-container">
+                            <div className="heatmap-grid">
+                                {/* Header row - hours */}
+                                <div className="heatmap-label"></div>
+                                {HEATMAP_HOURS.map(h => (
+                                    <div key={h} className="heatmap-hour-label">{h}</div>
+                                ))}
+                                {/* Data rows - days (Mon to Sun) */}
+                                {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
+                                    <>
+                                        <div key={`label-${dayIdx}`} className="heatmap-day-label">{DAY_LABELS[dayIdx]}</div>
+                                        {HEATMAP_HOURS.map(h => {
+                                            const val = stats.heatmapData?.[dayIdx]?.[h] || 0
+                                            return (
+                                                <div
+                                                    key={`${dayIdx}-${h}`}
+                                                    className="heatmap-cell"
+                                                    style={{ background: getHeatmapColor(val, heatmapMax) }}
+                                                    title={`${DAY_LABELS[dayIdx]} ${h}:00 — ${val} chats`}
+                                                >
+                                                    {val > 0 && <span className="heatmap-cell-value">{val}</span>}
+                                                </div>
+                                            )
+                                        })}
+                                    </>
+                                ))}
                             </div>
-                            <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
-                                Min: {formatSeconds(stats.minHandoffTime)} • Max: {formatSeconds(stats.maxHandoffTime)} • {stats.handoffCount} chats
+                            <div className="heatmap-legend">
+                                <span style={{ fontSize: '10px', color: '#94a3b8' }}>Menos</span>
+                                {['#f8fafc', '#dbeafe', '#93c5fd', '#3b82f6', '#1d4ed8'].map((c, i) => (
+                                    <div key={i} style={{ width: 16, height: 10, background: c, borderRadius: 2, border: '1px solid #e2e8f0' }} />
+                                ))}
+                                <span style={{ fontSize: '10px', color: '#94a3b8' }}>Más</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <CalendarDays size={16} color="#0d9488" />
+                            <h3 style={{ margin: 0 }}>Chats por Día de la Semana</h3>
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={dailyData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 500 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip
+                                        contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }}
+                                        formatter={(value) => [`${value} chats`, 'Cantidad']}
+                                    />
+                                    <Bar dataKey="chats" radius={[6, 6, 0, 0]}>
+                                        {dailyData.map((entry, i) => (
+                                            <Cell key={i} fill={entry.fill} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ═══ ROW 3: SENTIMENT TREND + DISTRIBUTION ═══ */}
+            <div className="grid-2">
+                <div className="card">
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Smile size={16} color="#10b981" />
+                            <h3 style={{ margin: 0 }}>Evolución del Sentimiento (8 semanas)</h3>
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart data={sentTrendData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                                    <YAxis yAxisId="left" tick={{ fontSize: 11 }} domain={[-1, 1]} />
+                                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} unit="%" />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
+                                    <ReferenceLine yAxisId="left" y={0} stroke="#94a3b8" strokeDasharray="3 3" />
+                                    <Area yAxisId="left" type="monotone" dataKey="score" stroke="#10b981" fill="#10b981" fillOpacity={0.1}
+                                        strokeWidth={2} name="Score promedio" dot={{ r: 3 }} />
+                                    <Line yAxisId="right" type="monotone" dataKey="negativeRate" stroke="#ef4444"
+                                        strokeWidth={2} name="% Negativos" dot={{ r: 3 }} strokeDasharray="4 2" />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-header">
+                        <h3 title="Proporción de pacientes con experiencia positiva, neutra, negativa o frustrada.">Distribución de Sentimiento</h3>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie data={sentimentData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3} dataKey="value"
+                                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                                        {sentimentData.map((entry, i) => (
+                                            <Cell key={i} fill={entry.color} />
+                                        ))}
+                                    </Pie>
+                                    <Tooltip />
+                                </PieChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ═══ ROW 4: EMERGING KEYWORDS + INTENCIONES ═══ */}
+            <div className="grid-2">
+                {stats.emergingKeywords && stats.emergingKeywords.length > 0 && (
+                    <div className="card">
+                        <div className="card-header">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Search size={16} color="#f59e0b" />
+                                <h3 style={{ margin: 0 }}>Keywords Emergentes (7 días)</h3>
+                            </div>
+                        </div>
+                        <div className="card-body">
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {stats.emergingKeywords.map((kw, i) => (
+                                    <div key={i} className="keyword-row">
+                                        <div className="keyword-name">"{kw.keyword}"</div>
+                                        <div className="keyword-stats">
+                                            <span className="keyword-count">{kw.current}</span>
+                                            <span className="keyword-change">
+                                                {kw.previous > 0
+                                                    ? `+${Math.round(((kw.current - kw.previous) / kw.previous) * 100)}%`
+                                                    : '🆕 NUEVA'
+                                                }
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     </div>
                 )}
+
+                <div className="card">
+                    <div className="card-header">
+                        <h3 title="Motivos más frecuentes por los cuales los pacientes se comunican.">Intenciones Detectadas</h3>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={intentData} layout="vertical">
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis type="number" tick={{ fontSize: 11 }} />
+                                    <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={120} />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
+                                    <Bar dataKey="value" fill="#1a6bb5" radius={[0, 4, 4, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            {/* Problematic Chats Section */}
+            {/* ═══ ROW 5: BOT EFFICIENCY + HOURLY ═══ */}
+            <div className="grid-2">
+                <div className="card">
+                    <div className="card-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Bot size={16} color="#8b5cf6" />
+                            <h3 style={{ margin: 0 }}>Eficiencia del Bot — Derivaciones por Camino</h3>
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        {stats.botPathTransferRates && stats.botPathTransferRates.length > 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {stats.botPathTransferRates.map((p, i) => (
+                                    <div key={i} className="bot-path-row">
+                                        <div className="bot-path-label">{p.path}</div>
+                                        <div className="bot-path-bar-container">
+                                            <div className="bot-path-bar"
+                                                style={{ width: `${Math.min(p.rate, 100)}%`, background: p.rate > 80 ? '#ef4444' : p.rate > 50 ? '#f59e0b' : '#10b981' }}
+                                            />
+                                        </div>
+                                        <div className="bot-path-stats">
+                                            <span style={{ fontWeight: 700, color: p.rate > 80 ? '#ef4444' : '#1e293b' }}>{p.rate}%</span>
+                                            <span style={{ fontSize: '11px', color: '#94a3b8' }}>({p.transferred}/{p.total})</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div style={{ color: '#94a3b8', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Sin datos suficientes</div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-header">
+                        <h3 title="Distribución de la cantidad de chats recibidos por cada hora del día.">Chats por Hora del Día</h3>
+                    </div>
+                    <div className="card-body">
+                        <div className="chart-container">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={hourlyData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                    <XAxis dataKey="hour" tick={{ fontSize: 11 }} interval={2} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
+                                    <Area type="monotone" dataKey="chats" stroke="#1a6bb5" fill="#1a6bb5" fillOpacity={0.15} strokeWidth={2} />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ═══ PROBLEMATIC CHATS ═══ */}
             {problems.length > 0 && (
-                <div className="card" style={{ marginTop: '20px', marginBottom: '20px' }}>
+                <div className="card" style={{ marginBottom: '24px' }}>
                     <div className="card-header">
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <AlertTriangle size={16} color="#ef4444" />
                             <h3 style={{ margin: 0 }}>
-                                ⚠️ Chats Problemáticos
+                                ⚠️ Chats en Riesgo
                                 <span style={{ fontSize: '12px', color: '#ef4444', fontWeight: 600, marginLeft: '8px' }}>
                                     {problems.length}
                                 </span>
@@ -318,146 +587,6 @@ export default function OverviewPanel({ onNavigateToChat }) {
                                     ... y {problems.length - 10} más
                                 </div>
                             )}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Charts Row 1: Temporal */}
-            <div className="grid-2">
-                <div className="card">
-                    <div className="card-header">
-                        <h3 title="Distribución de la cantidad de chats recibidos por cada hora del día.">Chats por Hora del Día</h3>
-                    </div>
-                    <div className="card-body">
-                        <div className="chart-container">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <AreaChart data={hourlyData}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                                    <XAxis dataKey="hour" tick={{ fontSize: 11 }} interval={2} />
-                                    <YAxis tick={{ fontSize: 11 }} />
-                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
-                                    <Area type="monotone" dataKey="chats" stroke="#1a6bb5" fill="#1a6bb5" fillOpacity={0.15} strokeWidth={2} />
-                                </AreaChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="card">
-                    <div className="card-header">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <CalendarDays size={16} color="#0d9488" />
-                            <h3 title="Cantidad de chats recibidos agrupados por día de la semana. El día con mayor volumen se resalta.">Chats por Día de la Semana</h3>
-                        </div>
-                    </div>
-                    <div className="card-body">
-                        <div className="chart-container">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={dailyData}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                                    <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 500 }} />
-                                    <YAxis tick={{ fontSize: 11 }} />
-                                    <Tooltip
-                                        contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }}
-                                        formatter={(value) => [`${value} chats`, 'Cantidad']}
-                                    />
-                                    <Bar dataKey="chats" radius={[6, 6, 0, 0]}>
-                                        {dailyData.map((entry, i) => (
-                                            <Cell key={i} fill={entry.fill} />
-                                        ))}
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Charts Row 2: Sentimiento */}
-            <div className="grid-2">
-                <div className="card">
-                    <div className="card-header">
-                        <h3 title="Proporción de pacientes con experiencia positiva, neutra, negativa o frustrada.">Distribución de Sentimiento</h3>
-                    </div>
-                    <div className="card-body">
-                        <div className="chart-container">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <PieChart>
-                                    <Pie data={sentimentData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3} dataKey="value"
-                                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                                        {sentimentData.map((entry, i) => (
-                                            <Cell key={i} fill={entry.color} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Charts Row 3: Intenciones + Bot */}
-            <div className="grid-2">
-                <div className="card">
-                    <div className="card-header">
-                        <h3 title="Motivos más frecuentes por los cuales los pacientes se comunican.">Intenciones Detectadas</h3>
-                    </div>
-                    <div className="card-body">
-                        <div className="chart-container">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={intentData} layout="vertical">
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                                    <XAxis type="number" tick={{ fontSize: 11 }} />
-                                    <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={120} />
-                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
-                                    <Bar dataKey="value" fill="#1a6bb5" radius={[0, 4, 4, 0]} />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="card">
-                    <div className="card-header">
-                        <h3>Primer Camino del Bot</h3>
-                    </div>
-                    <div className="card-body">
-                        <div className="chart-container">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <PieChart>
-                                    <Pie data={botPathData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3} dataKey="value"
-                                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                                        {botPathData.map((entry, i) => (
-                                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Department Distribution */}
-            {deptData.length > 0 && (
-                <div className="card" style={{ marginBottom: '24px' }}>
-                    <div className="card-header">
-                        <h3>Distribución por Departamento</h3>
-                    </div>
-                    <div className="card-body">
-                        <div className="chart-container-sm">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={deptData}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                                    <YAxis tick={{ fontSize: 11 }} />
-                                    <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }} />
-                                    <Bar dataKey="value" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                                </BarChart>
-                            </ResponsiveContainer>
                         </div>
                     </div>
                 </div>
