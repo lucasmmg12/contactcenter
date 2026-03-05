@@ -118,11 +118,48 @@ export function computeOverviewStats(allTickets, allAnalyses, dateFrom = null, d
         }
     })
 
-    // ─── INTENT DISTRIBUTION ───
+    // ─── INTENT DISTRIBUTION (with normalization) ───
+    // Map similar intents to canonical names
+    const INTENT_MAP = {
+        'solicitar turno': 'Solicitar turno',
+        'solicitar un turno': 'Solicitar turno',
+        'pedir turno': 'Solicitar turno',
+        'turno': 'Solicitar turno',
+        'sacar turno': 'Solicitar turno',
+        'reprogramar turno': 'Reprogramar turno',
+        'reprogramar un turno': 'Reprogramar turno',
+        'cambiar turno': 'Reprogramar turno',
+        'modificar turno': 'Reprogramar turno',
+        'cancelar turno': 'Cancelar turno',
+        'cancelación de turno': 'Cancelar turno',
+        'anular turno': 'Cancelar turno',
+        'consulta': 'Consulta general',
+        'consulta general': 'Consulta general',
+        'consulta médica': 'Consulta general',
+        'información': 'Consulta general',
+        'solicitar autorización': 'Solicitar autorización',
+        'autorización': 'Solicitar autorización',
+        'pedir autorización': 'Solicitar autorización',
+        'reclamo': 'Reclamo',
+        'queja': 'Reclamo',
+        'solicitar informe': 'Solicitar informe',
+        'informe': 'Solicitar informe',
+        'pedir informe': 'Solicitar informe',
+        'solicitar resultados': 'Solicitar resultados',
+        'resultados': 'Solicitar resultados',
+        'pedir resultados': 'Solicitar resultados',
+    }
+    function normalizeIntent(raw) {
+        if (!raw) return null
+        const key = raw.trim().toLowerCase()
+        return INTENT_MAP[key] || raw.trim()
+    }
+
     const intentDist = {}
     analyses.forEach(a => {
-        if (a.detected_intent) {
-            intentDist[a.detected_intent] = (intentDist[a.detected_intent] || 0) + 1
+        const intent = normalizeIntent(a.detected_intent)
+        if (intent) {
+            intentDist[intent] = (intentDist[intent] || 0) + 1
         }
     })
 
