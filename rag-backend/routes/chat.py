@@ -1,0 +1,88 @@
+"""
+Chat Routes — RAG Question Answering + Conversation Management
+V2.1: Non-blocking pipeline execution with asyncio.to_thread + request timeout
+"""
+import asyncio
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from config import supabase
+from services.rag import process_question, PIPELINE_TIMEOUT
+
+router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    question: str
+    conversation_id: str | None = None
+
+
+@router.post("/chat")
+async def chat(request: ChatRequest):
+    """Process a RAG question and return the answer with sources.
+    
+    Uses asyncio.to_thread to run the synchronous RAG pipeline
+    without blocking the event loop. Includes a timeout guard.
+    """
+    if not request.question.strip():
+        raise HTTPException(status_code=400, detail="La pregunta no puede estar vacía")
+
+    try:
+        # Run the sync pipeline in a separate thread with timeout
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                process_question,
+                question=request.question.strip(),
+                conversation_id=request.conversation_id,
+            ),
+            timeout=PIPELINE_TIMEOUT,
+        )
+        return result
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"La consulta tardó más de {PIPELINE_TIMEOUT}s. Intentá con una pregunta más corta o específica."
+        )
+    except Exception as e:
+        print(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al procesar la pregunta: {str(e)}")
+
+
+@router.get("/conversations")
+async def list_conversations():
+    """List all RAG conversations, most recent first."""
+    try:
+        result = supabase.table("rag_conversations") \
+            .select("*") \
+            .order("updated_at", desc=True) \
+            .limit(50) \
+            .execute()
+        return {"conversations": result.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(conversation_id: str):
+    """Get all messages for a specific conversation."""
+    try:
+        result = supabase.table("rag_messages") \
+            .select("*") \
+            .eq("conversation_id", conversation_id) \
+            .order("created_at") \
+            .execute()
+        return {"messages": result.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """Delete a conversation and all its messages."""
+    try:
+        supabase.table("rag_conversations") \
+            .delete() \
+            .eq("id", conversation_id) \
+            .execute()
+        return {"message": "Conversación eliminada"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

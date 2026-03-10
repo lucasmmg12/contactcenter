@@ -1,0 +1,655 @@
+# 📚 RAG System V2 — Documentación Técnica Completa
+
+> **Objetivo**: Sistema de Retrieval-Augmented Generation (RAG) de máxima precisión para consultar documentos internos. Usado por operadores que atienden al público y necesitan respuestas exactas extraídas de los documentos cargados.
+
+---
+
+## 1. Arquitectura General
+
+```mermaid
+graph LR
+    subgraph Frontend ["Frontend (Vite + React)"]
+        UI[UI Chat Interface]
+        DocPanel[Document Panel]
+        APIClient[API Client]
+    end
+
+    subgraph Backend ["Backend (Python FastAPI)"]
+        Main[main.py<br>FastAPI App]
+        ChatRoute[routes/chat.py]
+        DocRoute[routes/documents.py]
+        RAG[services/rag.py<br>Pipeline V2]
+        DocProc[services/document_processor.py]
+        Chunker[services/chunker.py]
+        Embeds[services/embeddings.py]
+        Config[config.py]
+    end
+
+    subgraph External ["Servicios Externos"]
+        OpenAI[OpenAI API<br>GPT-4o + Embeddings]
+        Supabase[Supabase<br>PostgreSQL + pgvector]
+    end
+
+    UI --> APIClient
+    DocPanel --> APIClient
+    APIClient -->|HTTP Proxy :5173→:8000| Main
+    Main --> ChatRoute
+    Main --> DocRoute
+    ChatRoute --> RAG
+    DocRoute --> DocProc
+    DocRoute --> Chunker
+    DocRoute --> Embeds
+    RAG --> Embeds
+    RAG --> OpenAI
+    Embeds --> OpenAI
+    Embeds --> Supabase
+    DocProc -.->|Texto limpio| Chunker
+    Chunker -.->|Chunks| Embeds
+```
+
+---
+
+## 2. Stack Tecnológico
+
+| Capa | Tecnología | Versión | Propósito |
+|------|-----------|---------|-----------|
+| **Frontend** | Vite | 7.3.1 | Build tool y dev server |
+| | React | 19.2.0 | UI framework |
+| | TailwindCSS | 4.2.1 | Estilos (design system GrowLabs) |
+| | Lucide React | 0.577.0 | Íconos SVG |
+| | React Markdown | 10.1.0 | Renderizar markdown en respuestas |
+| **Backend** | Python | 3.11+ | Runtime |
+| | FastAPI | 0.115.6 | Framework HTTP async |
+| | Uvicorn | 0.34.0 | ASGI server |
+| | OpenAI SDK | 1.59.3 | Client para GPT-4o y embeddings |
+| | Supabase SDK | 2.11.0 | Client para PostgreSQL + pgvector |
+| | PyPDF2 | 3.0.1 | Extracción de texto de PDFs |
+| | python-docx | 1.1.2 | Extracción de texto de Word |
+| | openpyxl | 3.1.5 | Extracción de texto de Excel |
+| | tiktoken | 0.8.0 | Conteo de tokens (tokenizer de OpenAI) |
+| | langchain-text-splitters | 0.3.4 | Chunking inteligente de texto |
+| **Base de datos** | Supabase (PostgreSQL) | — | Almacenamiento persistente |
+| | pgvector | — | Extensión para vectores y búsqueda por similitud |
+
+---
+
+## 3. Estructura de Archivos
+
+```
+test rag/
+├── supabase_migration_v2.sql         ← Script SQL para crear tablas y funciones
+├── backend/
+│   ├── .env                          ← Variables de entorno (API keys)
+│   ├── .gitignore                    ← Excluye .env, uploads/, __pycache__/
+│   ├── requirements.txt              ← Dependencias Python
+│   ├── main.py                       ← Entry point de FastAPI
+│   ├── config.py                     ← Configuración centralizada + clients
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── document_processor.py     ← Extracción de texto de archivos
+│   │   ├── chunker.py                ← División en chunks semánticos
+│   │   ├── embeddings.py             ← Generación de embeddings + búsqueda
+│   │   └── rag.py                    ← Pipeline RAG V2 completo
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   ├── chat.py                   ← Endpoints de chat + conversaciones
+│   │   └── documents.py              ← Endpoints de documentos (CRUD)
+│   └── uploads/                       ← Directorio temporal para archivos subidos
+└── frontend/
+    ├── package.json
+    ├── vite.config.js                 ← Config de Vite + proxy a backend
+    ├── index.html
+    └── src/
+        ├── main.jsx                   ← Entry point de React
+        ├── index.css                  ← Design system GrowLabs Ultra-Dark
+        ├── App.jsx                    ← Componente principal + state management
+        ├── api/
+        │   └── client.js             ← Funciones para consumir la API
+        └── components/
+            ├── ChatInterface.jsx      ← Área de chat + input
+            ├── MessageBubble.jsx      ← Mensajes individuales + sources
+            ├── Sidebar.jsx            ← Lista de conversaciones
+            └── DocumentPanel.jsx      ← Panel de subida de documentos
+```
+
+---
+
+## 4. Variables de Entorno
+
+### Backend ([backend/.env](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/.env))
+
+```env
+OPENAI_API_KEY=sk-proj-...          # API key de OpenAI (para embeddings y chat)
+SUPABASE_URL=https://xxx.supabase.co # URL del proyecto Supabase
+SUPABASE_SERVICE_ROLE_KEY=eyJ...     # Service Role Key (acceso total a la DB)
+```
+
+> [!CAUTION]
+> **Nunca subir [.env](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/.env) a Git.** Está excluido por [.gitignore](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/.gitignore). El `SUPABASE_SERVICE_ROLE_KEY` tiene acceso total a la base de datos.
+
+---
+
+## 5. Base de Datos (Supabase / PostgreSQL)
+
+### 5.1 Extensiones habilitadas
+
+- **[vector](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/embeddings.py#114-134)** (pgvector): Permite almacenar y buscar vectores de alta dimensionalidad.
+
+### 5.2 Tablas
+
+#### [documents](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/routes/documents.py#84-117)
+Almacena los chunks de texto con sus embeddings vectoriales.
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| [id](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/components/Sidebar.jsx#10-218) | `BIGSERIAL PK` | ID autoincremental |
+| `content` | `TEXT NOT NULL` | Contenido textual del chunk |
+| `metadata` | `JSONB` | Metadatos: `{filename, file_type, file_size, chunk_index, total_chunks, token_count}` |
+| [embedding](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/embeddings.py#9-17) | `VECTOR(1536)` | Vector de embedding generado por `text-embedding-3-large` |
+| `fts` | `TSVECTOR` | Índice de full-text search generado automáticamente por trigger |
+| `created_at` | `TIMESTAMPTZ` | Fecha de creación |
+
+**Índices:**
+- `documents_embedding_idx` — HNSW sobre [embedding](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/embeddings.py#9-17) con `vector_cosine_ops` (m=16, ef_construction=64)
+- `documents_fts_idx` — GIN sobre `fts` (full-text search)
+- `documents_metadata_idx` — GIN sobre `metadata` (filtrado por propiedades JSON)
+
+**Trigger:** `documents_fts_update` — Antes de INSERT o UPDATE, auto-genera `fts` usando `to_tsvector('spanish', content)`.
+
+#### [conversations](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/routes/chat.py#90-104)
+Almacena las conversaciones de chat.
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| [id](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/components/Sidebar.jsx#10-218) | `UUID PK` | ID generado con `gen_random_uuid()` |
+| `title` | `TEXT` | Título (primeros 80 chars de la primera pregunta) |
+| `created_at` | `TIMESTAMPTZ` | Fecha de creación |
+| `updated_at` | `TIMESTAMPTZ` | Última actividad (auto-actualizado por trigger) |
+
+#### [messages](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/routes/chat.py#106-120)
+Almacena los mensajes individuales de cada conversación.
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| [id](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/components/Sidebar.jsx#10-218) | `BIGSERIAL PK` | ID autoincremental |
+| `conversation_id` | `UUID FK → conversations` | Referencia a la conversación (CASCADE on DELETE) |
+| `role` | `TEXT CHECK` | `'user'` o `'assistant'` |
+| `content` | `TEXT NOT NULL` | Contenido del mensaje |
+| [sources](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/rag.py#177-200) | `JSONB` | Array de fuentes citadas (solo para assistant) |
+| `created_at` | `TIMESTAMPTZ` | Fecha de creación |
+
+**Trigger:** `update_conversation_on_message` — Al insertar un mensaje, actualiza `conversations.updated_at`.
+
+### 5.3 Funciones SQL (RPC)
+
+#### [hybrid_search(query_text, query_embedding, match_count, full_text_weight, semantic_weight, rrf_k)](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/embeddings.py#86-112)
+
+Búsqueda híbrida que combina **similitud vectorial** (cosine distance) con **full-text search** (tsvector) usando **Reciprocal Rank Fusion (RRF)**.
+
+**Cómo funciona:**
+1. **Búsqueda semántica**: Ordena documentos por distancia coseno al `query_embedding`. Devuelve top `match_count * 2`.
+2. **Búsqueda por keywords**: Usa `websearch_to_tsquery('spanish', query_text)` para buscar términos exactos en el índice `fts`. Devuelve top `match_count * 2`.
+3. **Fusión RRF**: Combina ambos rankings con la fórmula:
+   ```
+   score = (semantic_weight / (rrf_k + rank_semantic)) + (full_text_weight / (rrf_k + rank_keyword))
+   ```
+4. **FULL OUTER JOIN**: Incluye documentos que aparecen en uno o ambos rankings.
+5. Devuelve top `match_count` ordenados por `rank_score` descendente.
+
+**Parámetros por defecto:**
+- `match_count = 15`
+- `full_text_weight = 1.0` (peso de keywords)
+- `semantic_weight = 1.0` (peso de vector)
+- `rrf_k = 60` (constante de suavizado RRF — mayor = más suave)
+
+#### `match_documents(query_embedding, match_threshold, match_count)`
+Búsqueda vectorial pura (fallback). Filtra por threshold de similitud y devuelve top N.
+
+---
+
+## 6. Configuración Centralizada ([config.py](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/config.py))
+
+```python
+EMBEDDING_MODEL = "text-embedding-3-large"   # Modelo de embeddings de OpenAI
+EMBEDDING_DIMENSIONS = 1536                   # Dimensiones del vector (reducido de 3072 por límite HNSW)
+CHAT_MODEL = "gpt-4o"                        # Modelo para generación y HyDE
+CHUNK_SIZE = 1200                             # Tamaño máximo de cada chunk en caracteres
+CHUNK_OVERLAP = 200                           # Solapamiento entre chunks consecutivos
+MATCH_THRESHOLD = 0.3                         # Umbral mínimo de similitud coseno
+MATCH_COUNT = 15                              # Cantidad de resultados a recuperar por búsqueda
+RERANK_TOP_K = 6                              # Cuántos documentos conservar después del re-ranking
+```
+
+> [!IMPORTANT]
+> Se usa `text-embedding-3-large` con `dimensions=1536` porque Supabase limita HNSW a máx 2000 dimensiones. A pesar de la reducción, el modelo `large` a 1536 dims **supera** al modelo `small` a 1536 dims en calidad semántica.
+
+---
+
+## 7. Pipeline de Ingesta de Documentos
+
+El proceso de subida de un documento ejecuta estos pasos secuencialmente:
+
+```mermaid
+graph TD
+    A[Usuario sube archivo] -->|POST /api/upload| B[Validar extensión]
+    B --> C{¿Ya existe?}
+    C -->|Sí| D[Borrar versión anterior]
+    C -->|No| E[Continuar]
+    D --> E
+    E --> F[Guardar temporalmente en /uploads]
+    F --> G["document_processor.py<br>Extraer texto"]
+    G --> H["clean_text()<br>Limpiar Unicode inválido"]
+    H --> I["chunker.py<br>Dividir en chunks"]
+    I --> J["embeddings.py<br>Generar embeddings (batch)"]
+    J --> K["Insertar en Supabase<br>(trigger genera tsvector)"]
+    K --> L[Eliminar archivo temporal]
+    L --> M[Responder con resumen]
+```
+
+### 7.1 Extracción de texto ([document_processor.py](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/document_processor.py))
+
+Cada formato tiene su extractor específico:
+
+| Formato | Librería | Lógica de extracción |
+|---------|----------|---------------------|
+| `.pdf` | PyPDF2 | Itera páginas, extrae texto, prefija `[Página N]` |
+| `.docx` | python-docx | Extrae párrafos + contenido de tablas (celdas separadas por `\|`) |
+| `.xlsx` / `.xls` | openpyxl | Itera hojas y filas, prefija `[Hoja: nombre]` |
+| `.csv` | csv (stdlib) | Lee filas, une celdas con `\|` |
+| [.txt](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/requirements.txt) / [.md](file:///C:/Users/lucas/.gemini/antigravity/brain/0b027679-173f-4953-bcdc-a5aa04849e54/task.md) / [.json](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/package.json) / `.xml` / [.html](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/index.html) | open() | Lectura directa con `errors='replace'` |
+
+**Sanitización ([clean_text](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/document_processor.py#96-108)):**
+1. Codifica/decodifica UTF-8 con `errors='ignore'` → elimina surrogates Unicode inválidos
+2. Elimina null bytes (`\x00`)
+3. Elimina caracteres de control (`\x01-\x08`, `\x0b`, `\x0c`, `\x0e-\x1f`, `\x7f`) preservando `\n` y `\t`
+
+### 7.2 Chunking ([chunker.py](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/chunker.py))
+
+Usa `RecursiveCharacterTextSplitter` de LangChain con **separadores jerárquicos**:
+
+```
+Prioridad de corte (de mayor a menor):
+1. "\n\n\n"  → Secciones principales
+2. "\n\n"    → Párrafos
+3. "\n"      → Líneas
+4. ". "      → Oraciones
+5. "; "      → Cláusulas
+6. ", "      → Sub-cláusulas
+7. " "       → Palabras
+8. ""        → Caracteres (último recurso)
+```
+
+**Parámetros:**
+- `chunk_size = 1200` caracteres
+- `chunk_overlap = 200` caracteres (para no perder contexto entre chunks)
+
+**Metadata por chunk:**
+```json
+{
+  "filename": "documento.pdf",
+  "file_type": ".pdf",
+  "file_size": 128000,
+  "chunk_index": 0,
+  "total_chunks": 45,
+  "token_count": 287
+}
+```
+
+### 7.3 Embeddings ([embeddings.py](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/embeddings.py))
+
+- **Modelo**: `text-embedding-3-large` (OpenAI) con `dimensions=1536`
+- **Batching**: Procesa de a 50 textos por batch
+- **Rate limiting**: 0.5s de pausa entre batches
+- **Retry**: Si un batch falla, espera 3s y reintenta una vez
+- **Almacenamiento**: Inserta en Supabase en batches de 50 rows
+- La columna `fts` (tsvector) se genera automáticamente por el trigger SQL al insertar
+
+---
+
+## 8. Pipeline RAG V2 (Máxima Precisión)
+
+Este es el núcleo del sistema. Cada pregunta del usuario pasa por 6 etapas:
+
+```mermaid
+graph TD
+    Q["Pregunta del usuario"] --> S1
+    
+    subgraph Step1 ["Paso 1: HyDE"]
+        S1["GPT-4o genera<br>respuesta hipotética<br>(temp=0.7, max_tokens=500)"]
+    end
+    
+    subgraph Step2 ["Paso 2: Multi-Query"]
+        S2["GPT-4o genera<br>3 reformulaciones<br>(temp=0.5, max_tokens=300)"]
+    end
+    
+    S1 --> S3
+    S2 --> S3
+    Q --> S2
+    Q --> S3
+    
+    subgraph Step3 ["Paso 3: Hybrid Search × 5"]
+        S3["5 búsquedas híbridas:<br>1. Query original<br>2. Respuesta HyDE<br>3-5. Multi-queries<br><br>Cada una ejecuta:<br>Vector + Full-Text + RRF"]
+    end
+    
+    S3 -->|"~75 resultados totales"| S4
+    
+    subgraph Step4 ["Paso 4: De-duplicación"]
+        S4["Eliminar duplicados<br>por ID, conservar<br>el de mayor score"]
+    end
+    
+    S4 -->|"~30 únicos"| S5
+    
+    subgraph Step5 ["Paso 5: Re-ranking LLM"]
+        S5["Top 12 candidatos →<br>GPT-4o-mini puntúa<br>relevancia 0-10 cada uno<br><br>Filtrar score ≥ 3<br>Conservar top 6"]
+    end
+    
+    S5 -->|"Top 6"| S6
+    
+    subgraph Step6 ["Paso 6: Generación"]
+        S6["GPT-4o genera respuesta<br>temp=0, max_tokens=3000<br>con prompt estricto<br>+ historial de conversación"]
+    end
+    
+    S6 --> R["Respuesta con citas"]
+```
+
+### 8.1 HyDE (Hypothetical Document Embeddings)
+
+**¿Qué es?** En vez de buscar directamente con la pregunta del usuario (que suele ser corta y ambigua), le pedimos a GPT-4o que genere una **respuesta hipotética** como si ya tuviera la información. Esta respuesta hipotética se usa como query de búsqueda.
+
+**¿Por qué funciona?** El embedding de una respuesta hipotética está más cerca semánticamente de los chunks reales del documento que el embedding de una pregunta corta.
+
+**Prompt usado:**
+```
+Basándote en la siguiente pregunta, generá una respuesta hipotética detallada
+como si tuvieras acceso a los documentos relevantes. Esta respuesta se usará
+para buscar documentos similares, así que incluí términos técnicos y específicos
+que probablemente aparezcan en los documentos.
+```
+
+**Config:** `model=gpt-4o`, `temperature=0.7`, `max_tokens=500`
+
+### 8.2 Multi-Query
+
+**¿Qué es?** Genera 3 reformulaciones de la pregunta original, cada una desde un ángulo diferente.
+
+**Ejemplo:**
+- Original: "¿cuál es la cobertura del celular?"
+- Multi-1: "¿Qué equipos electrónicos están cubiertos por la póliza?"
+- Multi-2: "¿Cuáles son los montos de cobertura para dispositivos móviles?"
+- Multi-3: "¿Qué condiciones aplican para reclamo de celulares?"
+
+**Config:** `model=gpt-4o`, `temperature=0.5`, `max_tokens=300`
+
+### 8.3 Hybrid Search
+
+Para **cada** una de las 5 queries (original + HyDE + 3 multi-queries), se ejecuta la función SQL [hybrid_search](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/services/embeddings.py#86-112) que:
+
+1. **Búsqueda vectorial**: Calcula `1 - (embedding <=> query_embedding)` (similitud coseno)
+2. **Búsqueda full-text**: Usa `ts_rank_cd` con `websearch_to_tsquery('spanish', query)`
+3. **RRF**: Fusiona ambos rankings
+
+Esto genera ~75 resultados totales (5 queries × 15 resultados cada una).
+
+### 8.4 De-duplicación
+
+Muchos resultados se repiten entre las 5 búsquedas. Se eliminan duplicados por ID, conservando el de mayor `rank_score`. Típicamente queda ~30 documentos únicos.
+
+### 8.5 Re-ranking con LLM
+
+Los top 12 candidatos (por `rank_score`) pasan por GPT-4o-mini, que evalúa la relevancia real de cada chunk para la pregunta.
+
+**Prompt:**
+```
+Evaluá la relevancia del siguiente fragmento para responder la pregunta.
+Respondé SOLO con JSON: {"score": 0-10, "reason": "explicación"}
+```
+
+**Filtros:**
+- Se descartan los que tienen `score < 3`
+- Se conservan los top `RERANK_TOP_K = 6`
+
+**¿Por qué gpt-4o-mini?** Es significativamente más rápido y barato que gpt-4o, y para re-ranking (una tarea simple de clasificación) tiene rendimiento comparable.
+
+### 8.6 Generación Final
+
+Los 6 chunks re-rankeados se insertan en el prompt del sistema con formato:
+
+```
+--- Documento 1 (Fuente: poliza.pdf, Relevancia: 9/10) ---
+[contenido del chunk]
+
+--- Documento 2 (Fuente: poliza.pdf, Relevancia: 8/10) ---
+[contenido del chunk]
+```
+
+**System prompt estricto:**
+- Solo usar información del `[CONTEXTO]`
+- Si no hay info, responder "No tengo suficiente información..."
+- Citar siempre la fuente: **(Fuente: archivo.pdf)**
+- Si info está repartida en varios fragmentos, sintetizar coherentemente
+- `temperature=0` para respuestas determinísticas
+- Se incluyen los últimos 10 mensajes de historial de la conversación
+
+---
+
+## 9. API Endpoints
+
+### 9.1 Documentos
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/upload` | Subir documento (FormData con campo `file`) |
+| `GET` | `/api/documents` | Listar documentos únicos (agrupados por filename) |
+| `DELETE` | `/api/documents?filename=X` | Eliminar documento y todos sus chunks |
+
+**POST /api/upload — Response:**
+```json
+{
+  "message": "Documento 'poliza.pdf' procesado exitosamente",
+  "filename": "poliza.pdf",
+  "file_type": ".pdf",
+  "total_chunks": 45,
+  "stored_chunks": 45,
+  "content_preview": "Primeros 300 caracteres...",
+  "reindexed": false
+}
+```
+
+**GET /api/documents — Response:**
+```json
+{
+  "documents": [
+    {
+      "filename": "poliza.pdf",
+      "file_type": ".pdf",
+      "file_size": 128000,
+      "total_chunks": 45,
+      "created_at": "2026-03-09T22:00:00Z"
+    }
+  ],
+  "total_documents": 1
+}
+```
+
+### 9.2 Chat
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Enviar pregunta RAG |
+| `GET` | `/api/conversations` | Listar conversaciones (últimas 50) |
+| `GET` | `/api/conversations/{id}/messages` | Obtener mensajes de una conversación |
+| `DELETE` | `/api/conversations/{id}` | Eliminar conversación y mensajes |
+
+**POST /api/chat — Request:**
+```json
+{
+  "question": "¿Cuál es la cobertura del celular?",
+  "conversation_id": null
+}
+```
+
+**POST /api/chat — Response:**
+```json
+{
+  "answer": "Según el documento...",
+  "sources": [
+    {
+      "filename": "poliza.pdf",
+      "file_type": ".pdf",
+      "similarity": 0.782,
+      "rerank_score": 9,
+      "chunks_used": 3
+    }
+  ],
+  "documents_found": 6,
+  "model": "gpt-4o",
+  "conversation_id": "uuid-...",
+  "pipeline": {
+    "hyde_generated": true,
+    "multi_queries": 3,
+    "total_searched": 75,
+    "unique_results": 32,
+    "reranked_kept": 6
+  }
+}
+```
+
+---
+
+## 10. Frontend — Conexión y Proxy
+
+### 10.1 Proxy de Vite
+
+El frontend corre en `:5173` y el backend en `:8000`. En [vite.config.js](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/vite.config.js):
+
+```javascript
+server: {
+  proxy: {
+    '/api': {
+      target: 'http://localhost:8000',
+      changeOrigin: true,
+    },
+  },
+}
+```
+
+Todas las peticiones a `/api/*` se redirigen automáticamente al backend.
+
+### 10.2 API Client ([src/api/client.js](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js))
+
+7 funciones que encapsulan las peticiones HTTP:
+
+| Función | Método | Endpoint |
+|---------|--------|----------|
+| [sendChatMessage(question, conversationId)](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#3-17) | POST | `/api/chat` |
+| [uploadDocument(file)](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#18-34) | POST | `/api/upload` |
+| [listDocuments()](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#35-40) | GET | `/api/documents` |
+| [deleteDocument(filename)](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#41-48) | DELETE | `/api/documents?filename=` |
+| [listConversations()](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#49-54) | GET | `/api/conversations` |
+| [getConversationMessages(id)](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#55-60) | GET | `/api/conversations/{id}/messages` |
+| [deleteConversation(id)](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/src/api/client.js#61-68) | DELETE | `/api/conversations/{id}` |
+
+---
+
+## 11. Cómo Replicar desde Cero
+
+### Paso 1: Crear proyecto Supabase
+1. Ir a [supabase.com](https://supabase.com) → New Project
+2. Copiar: `Project URL`, `Service Role Key`
+
+### Paso 2: Ejecutar migración SQL
+1. Ir al SQL Editor del proyecto
+2. Pegar y ejecutar el contenido de [supabase_migration_v2.sql](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/supabase_migration_v2.sql)
+3. Esto crea: tablas, índices, triggers, funciones de búsqueda
+
+### Paso 3: Obtener API key de OpenAI
+1. Ir a [platform.openai.com](https://platform.openai.com)
+2. Crear API key con acceso a `gpt-4o` y `text-embedding-3-large`
+
+### Paso 4: Backend
+```bash
+# Crear estructura
+mkdir -p backend/services backend/routes backend/uploads
+cd backend
+
+# Crear .env
+echo "OPENAI_API_KEY=sk-..." > .env
+echo "SUPABASE_URL=https://xxx.supabase.co" >> .env
+echo "SUPABASE_SERVICE_ROLE_KEY=eyJ..." >> .env
+
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Ejecutar
+python -m uvicorn main:app --reload --port 8000
+```
+
+### Paso 5: Frontend
+```bash
+# Crear proyecto Vite
+npx -y create-vite@latest frontend -- --template react
+cd frontend
+
+# Instalar dependencias adicionales
+npm install @tailwindcss/vite tailwindcss lucide-react react-markdown
+
+# Copiar los archivos de src/
+# Ejecutar
+npm run dev
+```
+
+### Paso 6: Verificar
+1. Abrir `http://localhost:5173`
+2. Subir un documento
+3. Hacer una pregunta
+4. Verificar respuesta con citas
+
+---
+
+## 12. Costos Estimados de OpenAI por Pregunta
+
+Cada pregunta ejecuta múltiples llamadas a la API de OpenAI:
+
+| Etapa | Modelo | Llamadas | Tokens estimados | Costo aprox |
+|-------|--------|----------|------------------|-------------|
+| HyDE | gpt-4o | 1 | ~700 | ~$0.005 |
+| Multi-Query | gpt-4o | 1 | ~500 | ~$0.004 |
+| Embeddings | text-embedding-3-large | 5 | ~2500 | ~$0.0003 |
+| Re-ranking | gpt-4o-mini | 12 | ~6000 | ~$0.001 |
+| Generación | gpt-4o | 1 | ~4000 | ~$0.03 |
+| **Total por pregunta** | | **~20** | **~13,700** | **~$0.04** |
+
+> [!NOTE]
+> El costo dominante es la generación final con GPT-4o. Para ~100 preguntas/día, el costo estimado es ~$4/día.
+
+---
+
+## 13. Parámetros Ajustables
+
+| Parámetro | Ubicación | Default | Efecto al subir | Efecto al bajar |
+|-----------|-----------|---------|-----------------|-----------------|
+| `CHUNK_SIZE` | config.py | 1200 | Más contexto por chunk, menos chunks | Chunks más específicos, más chunks |
+| `CHUNK_OVERLAP` | config.py | 200 | Más redundancia, menos info perdida | Menos redundancia, posible pérdida |
+| `MATCH_THRESHOLD` | config.py | 0.3 | Resultados más relevantes, menos recall | Más resultados, posible ruido |
+| `MATCH_COUNT` | config.py | 15 | Más candidatos, búsqueda más amplia | Búsqueda más rápida, menos candidatos |
+| `RERANK_TOP_K` | config.py | 6 | Más contexto para GPT, más costo | Menos contexto, más rápido |
+| `rrf_k` | SQL function | 60 | Rankings más suaves | Rankings más agresivos |
+| `full_text_weight` | embeddings.py | 1.0 | Más peso a keywords exactas | Más peso a semántica |
+| `semantic_weight` | embeddings.py | 1.0 | Más peso a significado | Más peso a keywords |
+| `temperature` (gen) | rag.py | 0.0 | N/A (máx es 2.0) | Respuestas determinísticas |
+| `temperature` (HyDE) | rag.py | 0.7 | Respuestas más creativas | Respuestas más conservadoras |
+
+---
+
+## 14. Formatos de Documento Soportados
+
+| Extensión | Librería | Notas |
+|-----------|----------|-------|
+| `.pdf` | PyPDF2 | Extrae texto de PDFs digitales (no OCR para escaneados) |
+| `.docx` | python-docx | Párrafos + tablas |
+| `.xlsx` / `.xls` | openpyxl | Todas las hojas, filas como texto |
+| `.csv` | csv (stdlib) | UTF-8 con `errors='replace'` |
+| [.txt](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/backend/requirements.txt) | open() | Lectura directa |
+| [.md](file:///C:/Users/lucas/.gemini/antigravity/brain/0b027679-173f-4953-bcdc-a5aa04849e54/task.md) | open() | Lectura directa (markdown) |
+| [.json](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/package.json) | open() | Lectura directa |
+| `.xml` / [.html](file:///c:/Users/lucas/Desktop/Proyectos/test%20rag/frontend/index.html) / `.htm` | open() | Lectura directa (sin parsing HTML) |

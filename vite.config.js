@@ -6,5 +6,12 @@ export default defineConfig({
     server: {
         port: 5173,
         open: true,
+        proxy: {
+            '/rag-api': {
+                target: 'http://localhost:8000',
+                changeOrigin: true,
+                rewrite: (path) => path.replace(/^\/rag-api/, '/api'),
+            },
+        },
     },
 })

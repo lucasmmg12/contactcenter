@@ -5,12 +5,14 @@ import OverviewPanel from './components/OverviewPanel'
 import AgentsPanel from './components/AgentsPanel'
 import ChatbotPanel from './components/ChatbotPanel'
 import ConversationsPanel from './components/ConversationsPanel'
+import RAGPanel from './components/RAGPanel'
 
 const VIEW_TITLES = {
     overview: 'Overview',
     agents: 'Performance de Agentes',
     chatbot: 'Chatbot Analytics',
     conversations: 'Conversaciones',
+    rag: 'Asistente IA Documental',
 }
 
 const VIEW_DESCRIPTIONS = {
@@ -18,6 +20,7 @@ const VIEW_DESCRIPTIONS = {
     agents: 'Análisis detallado del rendimiento de cada agente',
     chatbot: 'Árbol de decisiones y efectividad del bot',
     conversations: 'Explorar conversaciones individuales',
+    rag: 'Consultá documentos internos con IA — respuestas precisas con citación de fuentes',
 }
 
 function App() {
@@ -38,6 +41,7 @@ function App() {
             case 'agents': return <AgentsPanel key={refreshKey} />
             case 'chatbot': return <ChatbotPanel key={refreshKey} />
             case 'conversations': return <ConversationsPanel key={refreshKey} initialTicketId={pendingTicketId} onTicketConsumed={() => setPendingTicketId(null)} />
+            case 'rag': return <RAGPanel key={refreshKey} />
             default: return <OverviewPanel key={refreshKey} />
         }
     }

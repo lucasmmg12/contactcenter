@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
     LayoutDashboard, Users, Bot, MessageSquare,
-    TrendingUp, ChevronLeft, ChevronRight
+    TrendingUp, ChevronLeft, ChevronRight, Brain
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -9,6 +9,10 @@ const NAV_ITEMS = [
     { id: 'agents', label: 'Agentes', icon: Users },
     { id: 'chatbot', label: 'Chatbot Analytics', icon: Bot },
     { id: 'conversations', label: 'Conversaciones', icon: MessageSquare },
+]
+
+const TOOL_ITEMS = [
+    { id: 'rag', label: 'Asistente IA', icon: Brain },
 ]
 
 export default function Sidebar({ activeView, onViewChange }) {
@@ -31,6 +35,18 @@ export default function Sidebar({ activeView, onViewChange }) {
             <nav className="sidebar-nav">
                 {!collapsed && <div className="nav-section-label">Analytics</div>}
                 {NAV_ITEMS.map(item => (
+                    <button
+                        key={item.id}
+                        className={`nav-item ${activeView === item.id ? 'active' : ''}`}
+                        onClick={() => onViewChange(item.id)}
+                        title={collapsed ? item.label : undefined}
+                    >
+                        <item.icon size={18} />
+                        {!collapsed && <span>{item.label}</span>}
+                    </button>
+                ))}
+                {!collapsed && <div className="nav-section-label" style={{ marginTop: 8 }}>Herramientas</div>}
+                {TOOL_ITEMS.map(item => (
                     <button
                         key={item.id}
                         className={`nav-item ${activeView === item.id ? 'active' : ''}`}
